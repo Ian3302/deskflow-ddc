@@ -11,7 +11,7 @@
 - [x] 新增持久化设置、接收端 UI、握手传递和提供端引擎参数。
 - [x] 验证配置迁移、无效输入、会话参数和界面；运行相关检查。
 - [x] 审查 diff，提交并创建 PR。
-- [ ] 跟进 CI 与评审。
+- [x] 跟进 CI 与评审：四个平台全部通过，当前无评审意见。
 
 ## 实施与关键决策
 
@@ -28,10 +28,18 @@ Deskflow 固定版本 1.27.0 的 `Server::onMouseMoveSecondary` 已实现 `DESKF
 - 未修改原生桥，未在本机执行原生桥测试或完整桌面打包；交由现有多平台 PR CI 验证。
 - 无两台实体电脑联调环境，Windows 提供、Mac 接收的实际手感、点击拖拽及跨屏需实机验证。引擎对每个整数位移事件乘倍率后取整，低速单像素移动不会严格按数学倍率缩放。
 
+### 远端 CI
+
+验证提交：`25567ba42db2a779a51a079fb51fd13055de4224`；后续提交仅更新本文档的验证结果。
+
+- [Tauri Build](https://github.com/Ian3302/deskflow-ddc/actions/runs/42771384351)：Windows x64、Mac ARM64 全部成功，包含类型检查、前端测试、原生桥测试、完整 Rust 测试、内置引擎 smoke test 和安装包构建上传。
+- [Ubuntu experimental build](https://github.com/Ian3302/deskflow-ddc/actions/runs/42771389398)：x64、ARM64 全部成功，包含前端、原生桥、Rust 与引擎测试及 deb 构建。
+- 创建 PR 后没有自动生成 Actions 运行记录，因此使用现有工作流的 `workflow_dispatch` 在本任务分支上触发验证，未修改工作流或仓库设置。
+
 ## PR 与状态
 
-[PR #2](https://github.com/Ian3302/deskflow-ddc/pull/2) 已创建，目标 `main`。CI 待完成；尚未授权合并，保留任务分支及 worktree。
+[PR #2](https://github.com/Ian3302/deskflow-ddc/pull/2) 已创建，目标 `main`。CI 全部通过；当前无评审意见。尚未授权合并，保留任务分支及 worktree。
 
 ## 遗留事项
 
-两端需更新到包含本功能的构建。PR 已创建，CI 待完成；尚未授权合并。
+两端需更新到包含本功能的构建。PR 已创建，CI 全部通过；尚未授权合并。
