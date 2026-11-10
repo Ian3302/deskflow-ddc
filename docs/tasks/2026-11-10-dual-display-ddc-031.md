@@ -20,7 +20,8 @@
 - [x] 同步构建资源，统一版本为 0.3.1
 - [x] 在任务 worktree 中复核验证并提交
 - [x] 创建 PR
-- [ ] 检查 CI 并合并
+- [x] 检查 CI
+- [x] 用户已授权，通过 GitHub PR 执行合并
 
 ## 修改与关键决策
 
@@ -50,7 +51,11 @@ Windows 实际 API、安装包和 macOS 桌面全特性检查交由 PR CI。原�
 
 ## PR 与状态
 
-PR https://github.com/Ian3302/deskflow-ddc/pull/1 已创建并推送，等待远端检查及合并。
+PR https://github.com/Ian3302/deskflow-ddc/pull/1 已创建并推送。用户已授权合并，四个平台检查均成功，按 GitHub PR 合并交付。
+
+- Windows x64 与 macOS ARM64 测试和安装包构建成功 https://github.com/Ian3302/deskflow-ddc/actions/runs/42752594763
+- Ubuntu x64 与 ARM64 测试和 deb 构建成功 https://github.com/Ian3302/deskflow-ddc/actions/runs/42752598366
+- 上述检查对应代码提交 `96b486281e90b5d74221028b5fbdac6f8f075814`。最终提交仅补齐本任务文档，不改变已验证代码。
 
 ## 遗留问题
 
