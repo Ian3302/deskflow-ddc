@@ -13,7 +13,13 @@ const props = defineProps<{ state: Snapshot; busy: boolean; execute: ActionRunne
 const emit = defineEmits<{ action: [action: Action] }>()
 const { draft, value } = useConfigDraft(() => props.state.config)
 const displayOnly = computed(() => props.state.config.mode === 'display-only')
-const dirty = computed(() => JSON.stringify(value()) !== JSON.stringify(props.state.config))
+const dirty = computed(() => {
+  const current = value()
+  const saved = props.state.config
+  return (Object.keys({ ...current, ...saved }) as (keyof typeof current)[]).some(
+    (key) => JSON.stringify(current[key]) !== JSON.stringify(saved[key]),
+  )
+})
 const locked = computed(() => props.busy || props.state.running)
 const outputInvalid = computed(() => {
   const screen = props.state.outputDisplays?.find((s) => s.id === draft.outputId)
@@ -27,6 +33,11 @@ function scan(method = draft.displayMethod) {
 }
 function methodChanged(method: 'ddc' | 'signal') {
   draft.crossScreenVideo = 'manual'
+  if (method === 'signal') {
+    if (props.state.config.secondDisplay)
+      draft.secondDisplay = { ...props.state.config.secondDisplay }
+    else delete draft.secondDisplay
+  }
   void scan(method)
 }
 const selected = computed(() => props.state.monitors.find((m) => m.id === draft.displayId))
@@ -183,6 +194,73 @@ const testReason = computed(() =>
               {{ draft.peerInput ?? '待设置' }}。所有指令由本机发送，另一端无需配对。
             </p>
           </div>
+          <template v-if="!displayOnly">
+            <div v-if="draft.secondDisplay" class="mapping-example">
+              <strong>第二台共享显示器</strong>
+              <p>两端按相同的物理屏幕顺序配置，每台屏的本机与对端输入值在另一端反向填写。</p>
+              <label class="field">
+                <span>第二台显示器</span>
+                <select v-model="draft.secondDisplay.displayId" :disabled="locked">
+                  <option value="" disabled>请选择显示器</option>
+                  <option
+                    v-if="
+                      draft.secondDisplay.displayId &&
+                      !state.monitors.some(
+                        (monitor) => monitor.id === draft.secondDisplay?.displayId,
+                      )
+                    "
+                    :value="draft.secondDisplay.displayId"
+                  >
+                    已保存的显示器（当前未扫描到）
+                  </option>
+                  <option
+                    v-for="(monitor, index) in state.monitors"
+                    :key="monitor.id"
+                    :value="monitor.id"
+                    :disabled="monitor.id === draft.displayId"
+                  >
+                    {{ monitor.name }} · 设备 {{ index + 1 }}
+                  </option>
+                </select>
+              </label>
+              <div class="mapping-grid">
+                <div class="mapping-card">
+                  <span class="mapping-label">{{ state.config.deviceName }} · 本机</span>
+                  <InputSourceField
+                    v-model="draft.secondDisplay.localInput"
+                    :disabled="locked"
+                    name="第二台显示器本机输入"
+                  />
+                </div>
+                <span class="mapping-arrow"><AppIcon name="switch" /></span>
+                <div class="mapping-card">
+                  <span class="mapping-label">{{ peerName }} · 对端</span>
+                  <InputSourceField
+                    v-model="draft.secondDisplay.peerInput"
+                    :disabled="locked"
+                    name="第二台显示器对端输入"
+                  />
+                </div>
+              </div>
+              <button
+                type="button"
+                class="button secondary"
+                :disabled="locked"
+                @click="delete draft.secondDisplay"
+              >
+                移除第二台显示器
+              </button>
+            </div>
+            <button
+              v-else
+              type="button"
+              class="button secondary"
+              :disabled="locked"
+              @click="draft.secondDisplay = { displayId: '', localInput: null, peerInput: null }"
+            >
+              添加第二台共享显示器
+            </button>
+          </template>
           <div class="form-footer">
             <span>{{
               state.running
@@ -193,7 +271,7 @@ const testReason = computed(() =>
                   ? '有未保存的修改'
                   : valid
                     ? '映射已保存，实际切换效果仍需测试'
-                    : '请选择显示器并填写两个不同的输入值'
+                    : '请为每台显示器选择设备并填写两个不同的输入值'
             }}</span
             ><button type="submit" class="button primary" :disabled="locked || !dirty || !valid">
               保存输入源映射

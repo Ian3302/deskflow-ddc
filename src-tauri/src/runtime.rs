@@ -571,6 +571,7 @@ impl Runtime {
                 || old.display_id != c.display_id
                 || old.local_input != c.local_input
                 || old.peer_input != c.peer_input
+                || old.second_display != c.second_display
             {
                 i.state.reset_display();
             }
@@ -691,6 +692,9 @@ impl Runtime {
             role: c.role.clone(),
             local_input: c.local_input.unwrap_or(0),
             peer_input: c.peer_input.unwrap_or(0),
+            second_display_inputs: c
+                .shared_second_display()
+                .map(|second| [second.local_input, second.peer_input]),
             shortcut: c.shortcut.clone(),
             modifier_mapping: c.modifier_mapping,
             clipboard: c.clipboard,
@@ -1080,6 +1084,12 @@ pub fn validate_peer(c: &Config, id: uuid::Uuid, pin: Option<&Pin>, peer: &Ident
             || (c.local_input == Some(peer.peer_input) && c.peer_input == Some(peer.local_input)),
         "两端输入源映射不对应"
     );
+    ensure!(
+        c.shared_second_display()
+            .map(|second| [second.peer_input, second.local_input])
+            == peer.second_display_inputs,
+        "两端第二台显示器设置不对应，请按相同屏幕顺序配置，并反向填写输入源"
+    );
     Ok(())
 }
 #[cfg(test)]
@@ -1207,6 +1217,7 @@ mod tests {
             role: "client".into(),
             local_input: 1,
             peer_input: 17,
+            second_display_inputs: None,
             shortcut: "control+alt+F10".into(),
             modifier_mapping: ModifierMapping::Original,
             clipboard: true,
@@ -1217,6 +1228,31 @@ mod tests {
             cross_screen_video: "follow".into(),
             retained_display: false,
         }
+    }
+    #[test]
+    fn dual_display_requires_reverse_mapping_for_each_screen() {
+        let id = uuid::Uuid::new_v4();
+        let mut p = peer();
+        let c = Config {
+            display_id: "first".into(),
+            local_input: Some(17),
+            peer_input: Some(1),
+            second_display: Some(crate::model::SecondDisplay {
+                display_id: "second".into(),
+                local_input: 18,
+                peer_input: 3,
+            }),
+            ..Config::default()
+        };
+        assert!(c.ready().is_ok());
+        assert!(validate_peer(&c, id, None, &p).is_err());
+        p.second_display_inputs = Some([18, 3]);
+        assert!(validate_peer(&c, id, None, &p).is_err());
+        p.second_display_inputs = Some([3, 18]);
+        assert!(validate_peer(&c, id, None, &p).is_ok());
+        let mut duplicate = c;
+        duplicate.display_id = "SECOND".into();
+        assert!(duplicate.ready().is_err());
     }
     #[test]
     fn automatic_source_requires_explicit_matching_capabilities_but_legacy_ddc_still_pairs() {

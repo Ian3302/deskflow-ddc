@@ -38,8 +38,19 @@ const localActionLabel = computed(() =>
 const peerActionLabel = computed(() =>
   displayOnly.value ? '切到另一输入' : '切到 ' + (props.state.peer?.name || '另一台电脑'),
 )
+const secondDisplay = computed(() =>
+  !displayOnly.value && props.state.config.displayMethod === 'ddc'
+    ? props.state.config.secondDisplay
+    : undefined,
+)
+function inputLabel(key: 'localInput' | 'peerInput') {
+  if (props.state.config.displayMethod === 'signal') return '自动选源'
+  const primary = props.state.config[key] ?? '待配置'
+  return secondDisplay.value ? `${primary} / ${secondDisplay.value[key]}` : primary
+}
 const monitorName = computed(
   () =>
+    (secondDisplay.value ? '两台共享显示器' : undefined) ||
     (props.state.config.displayMethod === 'signal'
       ? props.state.outputDisplays?.find((m) => m.id === props.state.config.outputId)?.name
       : undefined) ||
@@ -87,14 +98,7 @@ const connectionLabel = computed(() =>
           {{
             displayOnly ? '仅控制输入源' : state.config.role === 'host' ? '提供键鼠' : '接收键鼠'
           }}</small
-        ><span class="input-badge"
-          >输入源
-          {{
-            state.config.displayMethod === 'signal'
-              ? '自动选源'
-              : (state.config.localInput ?? '待配置')
-          }}</span
-        >
+        ><span class="input-badge">输入源 {{ inputLabel('localInput') }}</span>
       </div>
       <div class="connection-line" aria-hidden="true">
         <span></span><AppIcon name="switch" :size="18" /><span></span>
@@ -114,7 +118,9 @@ const connectionLabel = computed(() =>
         </div>
         <div class="display-stand"></div>
         <div class="display-foot"></div>
-        <span class="display-caption">同一块显示器 · 画面以实际显示为准</span>
+        <span class="display-caption"
+          >{{ secondDisplay ? '双屏联动' : '同一块显示器' }} · 画面以实际显示为准</span
+        >
       </div>
       <div class="connection-line" aria-hidden="true">
         <span></span><AppIcon name="switch" :size="18" /><span></span>
@@ -134,14 +140,7 @@ const connectionLabel = computed(() =>
           }}<template v-if="!displayOnly">
             · {{ state.config.role === 'host' ? '接收键鼠' : '提供键鼠' }}</template
           ></small
-        ><span class="input-badge"
-          >输入源
-          {{
-            state.config.displayMethod === 'signal'
-              ? '自动选源'
-              : (state.config.peerInput ?? '待配置')
-          }}</span
-        >
+        ><span class="input-badge">输入源 {{ inputLabel('peerInput') }}</span>
       </div>
     </div>
     <div class="workspace-controls">

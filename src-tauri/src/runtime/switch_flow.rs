@@ -4,36 +4,90 @@ impl Runtime {
     pub(super) async fn read_display_source(&self, peer_id: &str) -> Result<Option<String>> {
         let s = self.snapshot().await;
         let value = self.platform.current_input(&s.config.display_id).await?;
-        Ok(value.and_then(|value| {
+        let source = value.and_then(|value| {
             if Some(value) == s.config.local_input {
-                Some(s.device_id)
+                Some(true)
             } else if Some(value) == s.config.peer_input {
-                Some(peer_id.into())
+                Some(false)
             } else {
                 None
             }
-        }))
+        });
+        if let Some(second) = s.config.shared_second_display() {
+            let read = self.platform.current_input(&second.display_id).await?;
+            let expected = source.map(|local| {
+                if local {
+                    second.local_input
+                } else {
+                    second.peer_input
+                }
+            });
+            if expected.is_none() || read != expected {
+                return Ok(None);
+            }
+        }
+        Ok(source.map(|local| if local { s.device_id } else { peer_id.into() }))
     }
     async fn write_display_with_retry(&self, link: &Link, target: &str) -> Result<()> {
         let initial = self.snapshot().await;
-        // A read reply may be stale, cached or connection-specific. It is not
-        // evidence of the physical picture and must not rewrite routing/target.
+        let dual = initial.config.shared_second_display().is_some();
+        // Explicit dual-screen commands can retry a partial switch by
+        // sending the same target through both computers.
         ensure!(
-            initial.display_status != "uncertain",
+            dual || initial.display_status != "uncertain",
             "画面状态不确定，请手动恢复提供端画面并重新开始共享"
         );
         let source = initial
             .display_device_id
-            .as_ref()
+            .as_deref()
+            .or_else(|| dual.then_some(initial.device_id.as_str()))
             .context("尚未确定外接屏的画面来源")?;
-        let alternate = if source == &initial.device_id {
-            initial.peer.as_ref().map(|peer| peer.id.clone())
+        let alternate = if source == initial.device_id {
+            initial.peer.as_ref().map(|peer| peer.id.as_str())
         } else {
-            Some(initial.device_id.clone())
+            Some(initial.device_id.as_str())
         };
-        let first = self.attempt_display_input(link, source, target).await;
+        if !dual {
+            let result = self
+                .write_one_display(link, source, alternate, target, false)
+                .await;
+            return self
+                .finish_display_write(link, target, initial, result)
+                .await;
+        }
+        let mut errors = Vec::new();
+        for second in [false, true] {
+            let result = self
+                .write_one_display(link, source, alternate, target, second)
+                .await;
+            ensure!(self.current(link), "共享会话已结束");
+            if let Err(error) = result {
+                let screen = if second { "第二台" } else { "第一台" };
+                errors.push(format!("{screen}显示器：{error:#}"));
+            }
+        }
+        let result = if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!(errors.join("；")))
+        };
+        self.finish_display_write(link, target, initial, result)
+            .await
+    }
+
+    async fn write_one_display(
+        &self,
+        link: &Link,
+        source: &str,
+        alternate: Option<&str>,
+        target: &str,
+        second: bool,
+    ) -> Result<()> {
+        let first = self
+            .attempt_display_input(link, source, target, second)
+            .await;
         ensure!(self.current(link), "共享会话已结束");
-        let result = if let Some(alternate) = alternate {
+        if let Some(alternate) = alternate {
             self.trace(
                 if first.is_ok() {
                     "display.unverifiedRetry"
@@ -53,7 +107,9 @@ impl Runtime {
                 tokio::time::sleep(Duration::from_millis(250)).await;
             }
             ensure!(self.current(link), "共享会话已结束");
-            let second = self.attempt_display_input(link, &alternate, target).await;
+            let second = self
+                .attempt_display_input(link, alternate, target, second)
+                .await;
             match (first, second) {
                 (Ok(()), _) | (_, Ok(())) => Ok(()),
                 (Err(first), Err(second)) => Err(second)
@@ -61,34 +117,70 @@ impl Runtime {
             }
         } else {
             first
-        };
-        // Commit only once: a failed supplementary write must not erase an
-        // accepted first command or cause the keyboard to be restored incorrectly.
-        self.finish_display_write(link, target, initial, result)
-            .await
+        }
     }
-    async fn send_display_input(&self, link: &Link, source: &str, target: &str) -> Result<Value> {
+    pub(super) async fn write_ddc_input(
+        &self,
+        s: &Snapshot,
+        target: &str,
+        second: bool,
+    ) -> Result<Value> {
+        let local = target == s.device_id;
+        let (monitor, value) = if second {
+            let mapping = s
+                .config
+                .shared_second_display()
+                .context("未配置第二台共享显示器")?;
+            (
+                &mapping.display_id,
+                if local {
+                    mapping.local_input
+                } else {
+                    mapping.peer_input
+                },
+            )
+        } else {
+            let value = if local {
+                s.config.local_input
+            } else {
+                s.config.peer_input
+            };
+            (&s.config.display_id, value.context("未配置显示器输入源")?)
+        };
+        self.trace(
+            "display.writeInput",
+            json!({"target":target,"monitor":monitor,"value":value}),
+        )
+        .await;
+        self.platform.input(monitor, value).await?;
+        Ok(json!({"monitor":monitor,"value":value,
+            "commandAccepted":true,"pictureVerified":false}))
+    }
+
+    async fn send_display_input(
+        &self,
+        link: &Link,
+        source: &str,
+        target: &str,
+        second: bool,
+    ) -> Result<Value> {
         let s = self.snapshot().await;
         ensure!(self.current(link), "共享会话已结束");
         if source == s.device_id {
-            let value = if target == s.device_id {
-                s.config.local_input.context("未设置本机输入源")?
-            } else {
-                s.config.peer_input.context("未设置对端输入源")?
-            };
-            self.trace(
-                "display.localWriteRequested",
-                json!({"target":target,"monitor":s.config.display_id,"value":value}),
-            )
-            .await;
-            self.platform.input(&s.config.display_id, value).await?;
-            Ok(json!({"monitor":s.config.display_id,"value":value,
-                "commandAccepted":true,"pictureVerified":false}))
+            self.write_ddc_input(&s, target, second).await
         } else {
             // Older peers return true; newer peers also include their configured
             // monitor/input value for diagnosis. Neither is picture verification.
             link.session
-                .request("set-input", json!(target), Duration::from_secs(10))
+                .request(
+                    if second {
+                        "set-second-input"
+                    } else {
+                        "set-input"
+                    },
+                    json!(target),
+                    Duration::from_secs(10),
+                )
                 .await
         }
     }
@@ -130,14 +222,20 @@ impl Runtime {
         }
         self.publish();
     }
-    async fn attempt_display_input(&self, link: &Link, source: &str, target: &str) -> Result<()> {
+    async fn attempt_display_input(
+        &self,
+        link: &Link,
+        source: &str,
+        target: &str,
+        second: bool,
+    ) -> Result<()> {
         let s = self.snapshot().await;
         self.trace(
             "display.writeRequested",
-            json!({"source":source,"target":target}),
+            json!({"source":source,"target":target,"secondDisplay":second}),
         )
         .await;
-        let result = self.send_display_input(link, source, target).await;
+        let result = self.send_display_input(link, source, target, second).await;
         ensure!(self.current(link), "共享会话已结束");
         self.trace(
             "display.writeCompleted",
@@ -536,13 +634,15 @@ impl Runtime {
             .map_err(|_| anyhow::anyhow!("正在切换，请稍后"))?;
         let protection = self.switch_protection.enter(target.as_deref())?;
         ensure!(self.current(link), "共享会话已结束");
+        let mut s = self.snapshot().await;
+        let explicit_dual = target.is_some() && s.config.shared_second_display().is_some();
         let recovery = self.display_recovery.lock().await.pending();
-        if let Some(token) = recovery {
+        if let Some(token) = recovery.filter(|_| !explicit_dual) {
             let _effects = self.effects.lock().await;
             self.prepare_resumed_switch(link, token).await?;
+            s = self.snapshot().await;
         }
-        let mut s = self.snapshot().await;
-        if s.display_status == "uncertain" {
+        if s.display_status == "uncertain" && !explicit_dual {
             // Recover routing before resolving a toggle, without changing its
             // direction based on keyboard ownership or a pre-failure cache.
             let source = self
@@ -570,7 +670,7 @@ impl Runtime {
         protection.target(&target);
         self.trace("switch.command", json!({"target":target,"active":s.active_device_id,"display":s.display_device_id,"session":link.id})).await;
         ensure!(
-            s.display_status != "uncertain",
+            explicit_dual || s.display_status != "uncertain",
             "画面状态不确定，请手动恢复提供端画面后重新开始共享"
         );
         // An inactive input may not appear in the target's display enumeration.
@@ -734,7 +834,20 @@ impl Runtime {
             target
         };
         self.publish();
-        let result = self.platform.input(&s.config.display_id, value).await;
+        let primary = self.platform.input(&s.config.display_id, value).await;
+        let result = if let Some(second) = s.config.shared_second_display() {
+            let second_value = if label == "local" {
+                second.local_input
+            } else {
+                second.peer_input
+            };
+            let secondary = self.platform.input(&second.display_id, second_value).await;
+            primary
+                .context("第一台显示器指令失败")
+                .and(secondary.context("第二台显示器指令失败"))
+        } else {
+            primary
+        };
         ensure!(
             self.epoch.load(Ordering::Acquire) == epoch,
             "切换已取消，正在恢复输出"
@@ -769,6 +882,81 @@ impl Runtime {
         self.log("info", "输入切换指令已发送，请以实际画面为准")
             .await;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod dual_display_tests {
+    use super::*;
+    use crate::runtime::pointer_bridge::tests::{attach_with_requests, fixture};
+
+    #[tokio::test]
+    async fn partial_ddc_write_keeps_routing_uncertain_until_both_screens_accept() {
+        let directory = tempfile::tempdir().unwrap();
+        let runtime = fixture(directory.path(), "host");
+        let (remote, mut requests) = attach_with_requests(&runtime).await;
+        let link = runtime.link.lock().await.as_ref().unwrap().clone();
+        let target = runtime.snapshot().await.device_id;
+        // Use unavailable local monitor IDs so only the mock peer can accept.
+        runtime.inner.lock().await.state.config.second_display =
+            Some(crate::model::SecondDisplay {
+                display_id: String::new(),
+                local_input: 18,
+                peer_input: 3,
+            });
+        let expected = target.clone();
+        let receiver = tokio::spawn(async move {
+            for (command, accepted) in [
+                ("set-input", true),
+                ("set-second-input", false),
+                ("set-input", true),
+                ("set-second-input", true),
+            ] {
+                let Some(Incoming::Request {
+                    id,
+                    method,
+                    payload,
+                }) = requests.recv().await
+                else {
+                    panic!("missing DDC request");
+                };
+                assert_eq!(method, command);
+                assert_eq!(payload, json!(expected));
+                let result = if accepted {
+                    Ok(json!(true))
+                } else {
+                    Err(anyhow::anyhow!("test DDC failure"))
+                };
+                remote.reply(id, result).await.unwrap();
+            }
+            remote
+        });
+        let failure = runtime
+            .write_display_with_retry(&link, &target)
+            .await
+            .unwrap_err();
+        assert!(failure.to_string().contains("第二台显示器"));
+        let partial = runtime.snapshot().await;
+        assert_eq!(partial.display_status, "uncertain");
+        assert!(partial.display_device_id.is_none());
+        // A real retry has a connected peer and can address both endpoints.
+        runtime.inner.lock().await.state.peer = Some(Peer {
+            id: "receiver".into(),
+            name: "Receiver".into(),
+            platform: "win32".into(),
+            fingerprint: "a".repeat(64),
+            file_transfer: false,
+            lock_control: false,
+            input_configured: true,
+            retained_display: false,
+            modifier_mapping: ModifierMapping::Original,
+        });
+        runtime
+            .write_display_with_retry(&link, &target)
+            .await
+            .unwrap();
+        assert_eq!(runtime.snapshot().await.display_device_id, Some(target));
+        receiver.await.unwrap().close();
     }
 }
 

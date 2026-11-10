@@ -214,17 +214,27 @@ impl Runtime {
                         .is_ok_and(|source| source == target)
                 } else {
                     let s = self.snapshot().await;
-                    let value = if target == "local" {
-                        s.config.local_input
+                    if s.config.shared_second_display().is_some() {
+                        let source = self.read_display_source("peer").await.ok().flatten();
+                        let expected = if target == "local" {
+                            &s.device_id
+                        } else {
+                            "peer"
+                        };
+                        source.as_deref() == Some(expected)
                     } else {
-                        s.config.peer_input
-                    };
-                    self.platform
-                        .current_input(&s.config.display_id)
-                        .await
-                        .ok()
-                        .flatten()
-                        .is_some_and(|input| Some(input) == value)
+                        let value = if target == "local" {
+                            s.config.local_input
+                        } else {
+                            s.config.peer_input
+                        };
+                        self.platform
+                            .current_input(&s.config.display_id)
+                            .await
+                            .ok()
+                            .flatten()
+                            .is_some_and(|input| Some(input) == value)
+                    }
                 };
                 matches = if matches_target { matches + 1 } else { 0 };
                 if matches >= 2 {

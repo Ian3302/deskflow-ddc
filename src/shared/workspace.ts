@@ -69,12 +69,17 @@ export function displayMappingValid(config: Config): boolean {
     return (
       config.mode === 'sharing' && !!config.outputId.trim() && config.crossScreenVideo === 'manual'
     )
+  const second = config.mode === 'sharing' ? config.secondDisplay : undefined
   return (
-    !!config.displayId &&
-    config.localInput !== null &&
-    config.peerInput !== null &&
-    config.localInput !== config.peerInput &&
-    [config.localInput, config.peerInput].every((n) => Number.isInteger(n) && n >= 0 && n <= 65535)
+    [config, ...(second ? [second] : [])].every(
+      ({ displayId, localInput, peerInput }) =>
+        !!displayId &&
+        localInput !== peerInput &&
+        [localInput, peerInput].every(
+          (n) => n !== null && Number.isInteger(n) && n >= 0 && n <= 65535,
+        ),
+    ) &&
+    (!second || second.displayId.toLowerCase() !== config.displayId.toLowerCase())
   )
 }
 // Keep save and start ordered, including when the native save rejects.

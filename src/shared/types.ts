@@ -20,6 +20,11 @@ export interface Config {
   displayId: string
   localInput: number | null
   peerInput: number | null
+  secondDisplay?: {
+    displayId: string
+    localInput: number | null
+    peerInput: number | null
+  }
   shortcut: string
   modifierMapping: ModifierMapping
   windowsSecureInput: boolean

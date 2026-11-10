@@ -771,6 +771,7 @@ mod tests {
             role: "client".into(),
             local_input: 1,
             peer_input: 17,
+            second_display_inputs: None,
             shortcut: "control+alt+F10".into(),
             modifier_mapping: ModifierMapping::Original,
             clipboard: true,

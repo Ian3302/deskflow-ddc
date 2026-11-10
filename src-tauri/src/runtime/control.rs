@@ -690,7 +690,7 @@ impl Runtime {
                 self.command_switch_target(link, None).await?;
                 Ok(json!(true))
             }
-            "set-input" => {
+            "set-input" | "set-second-input" => {
                 let target = target_id(&payload)?;
                 let s = self.snapshot().await;
                 ensure!(
@@ -703,28 +703,11 @@ impl Runtime {
                     target == s.device_id || target == peer.id.to_string(),
                     "无效的切换目标"
                 );
-                let value = if target == s.device_id {
-                    s.config.local_input.context("未设置本机输入源")?
-                } else {
-                    s.config.peer_input.context("未设置对端输入源")?
-                };
-                self.trace(
-                    "display.remoteWriteRequested",
-                    json!({"target":target,"monitor":s.config.display_id,"value":value}),
-                )
-                .await;
-                let result = self.platform.input(&s.config.display_id, value).await;
-                self.trace(
-                    "display.remoteWriteCompleted",
-                    json!({"target":target,"monitor":s.config.display_id,"value":value,
-                        "commandAccepted":result.is_ok(),"pictureVerified":false,
-                        "error":result.as_ref().err().map(|e|e.to_string())}),
-                )
-                .await;
-                result?;
+                let result = self
+                    .write_ddc_input(&s, &target, method == "set-second-input")
+                    .await?;
                 ensure!(self.current(link), "共享会话已结束");
-                Ok(json!({"monitor":s.config.display_id,"value":value,
-                    "commandAccepted":true,"pictureVerified":false}))
+                Ok(result)
             }
             "land-pointer" => {
                 let _effects = self.effects.lock().await;

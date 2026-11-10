@@ -2,6 +2,16 @@ import type { ActionFailure } from './workspace'
 export function errorGuidance(failure: ActionFailure) {
   const message = failure.message
   const summary = message.split(/\r?\n/)[0]?.slice(0, 220) || '未收到错误详情，请导出诊断日志。'
+  if (['switch', 'testInput'].includes(failure.action) && /第[一二]台显示器[：指]/.test(message))
+    return {
+      summary,
+      advice:
+        failure.action === 'switch'
+          ? '检查失败屏幕的输入源映射和连接，再用主界面明确选择目标电脑重试。'
+          : '检查失败屏幕的输入源映射和连接，再重试两个方向。',
+      destination: 'display',
+      label: '检查显示器配置',
+    }
   if (/辅助功能|权限|accessibility/i.test(message))
     return {
       summary,

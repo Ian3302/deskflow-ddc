@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { configSchema, defaultConfig } from '../src/shared/config'
 import { actionSchema } from '../src/shared/actions'
+import { displayMappingValid } from '../src/shared/workspace'
 
 describe('desktop frontend configuration', () => {
   it('starts with manual video switching and the 0.2 ports', () => {
@@ -47,6 +48,23 @@ describe('desktop frontend configuration', () => {
     expect(configSchema.safeParse({ ...config, fallbackIps: ['192.168.1.2', '::1'] }).success).toBe(
       true,
     )
+  })
+
+  it('accepts different input pairs for two distinct shared displays', () => {
+    const primary = { ...defaultConfig('desktop'), displayId: 'left', localInput: 1, peerInput: 17 }
+    const secondDisplay = { displayId: 'right', localInput: 18, peerInput: 3 }
+    expect(displayMappingValid(primary)).toBe(true)
+    const dual = { ...primary, secondDisplay }
+    expect(displayMappingValid(dual)).toBe(true)
+    expect(configSchema.parse(dual)).toEqual(dual)
+    for (const invalid of [
+      { ...secondDisplay, displayId: 'LEFT' },
+      { ...secondDisplay, localInput: null },
+      { ...secondDisplay, peerInput: secondDisplay.localInput },
+    ]) {
+      expect(displayMappingValid({ ...primary, secondDisplay: invalid })).toBe(false)
+      expect(configSchema.safeParse({ ...primary, secondDisplay: invalid }).success).toBe(false)
+    }
   })
 
   it('validates actions and rejects extra fields', () => {

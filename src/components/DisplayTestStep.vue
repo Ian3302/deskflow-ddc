@@ -14,6 +14,12 @@ const props = defineProps<{
 }>()
 const pending = shallowRef<InputTarget | null>(null)
 const { results, test, confirm } = useDisplayTest(() => props.config, props.execute)
+function inputs(target: InputTarget) {
+  const key = target === 'local' ? 'localInput' : 'peerInput'
+  const primary = props.config[key] ?? '未设置'
+  const second = props.displayOnly ? undefined : props.config.secondDisplay
+  return second ? `第一台 ${primary} / 第二台 ${second[key] ?? '未设置'}` : primary
+}
 const labels = {
   idle: '尚未测试',
   sending: '正在发送指令…',
@@ -47,7 +53,7 @@ async function send() {
     <div class="input-test-grid">
       <div v-for="target in ['local', 'peer'] as const" :key="target" class="input-test-item">
         <h3>{{ target === 'local' ? localName : peerName }}</h3>
-        <p>输入源 {{ (target === 'local' ? config.localInput : config.peerInput) ?? '未设置' }}</p>
+        <p>输入源 {{ inputs(target) }}</p>
         <span
           :class="['test-status', { confirmed: results[target] === 'confirmed' }]"
           role="status"
@@ -61,7 +67,13 @@ async function send() {
           测试此输入
         </button>
         <div v-if="results[target] === 'sent' && !disabled" class="picture-confirm">
-          <p>显示器现在是否显示这台电脑？</p>
+          <p>
+            {{
+              !displayOnly && config.secondDisplay
+                ? '两台显示器现在是否都显示这台电脑？'
+                : '显示器现在是否显示这台电脑？'
+            }}
+          </p>
           <div class="button-group">
             <button class="button secondary compact" @click="confirm(target, true)">
               是，画面正确</button
@@ -78,8 +90,7 @@ async function send() {
     >
       <span
         >即将请求显示 <b>{{ pending === 'local' ? localName : peerName }}</b
-        >（输入源
-        {{ pending === 'local' ? config.localInput : config.peerInput }}）。画面将立即变化。</span
+        >（输入源 {{ inputs(pending) }}）。画面将立即变化。</span
       >
       <div class="button-group">
         <button class="button primary compact" @click="send">确认发送指令</button

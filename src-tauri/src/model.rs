@@ -54,6 +54,14 @@ pub enum DisplayMethod {
     Ddc,
     Signal,
 }
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SecondDisplay {
+    pub display_id: String,
+    pub local_input: u16,
+    pub peer_input: u16,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Config {
@@ -75,6 +83,8 @@ pub struct Config {
     pub display_id: String,
     pub local_input: Option<u16>,
     pub peer_input: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub second_display: Option<SecondDisplay>,
     pub shortcut: String,
     #[serde(default)]
     pub modifier_mapping: ModifierMapping,
@@ -108,6 +118,7 @@ impl Default for Config {
             display_id: String::new(),
             local_input: None,
             peer_input: None,
+            second_display: None,
             shortcut: "control+alt+F10".into(),
             modifier_mapping: ModifierMapping::Original,
             windows_secure_input: false,
@@ -123,6 +134,14 @@ fn clean(s: &str, max: usize) -> bool {
     s.chars().count() <= max && !s.contains(['\r', '\n', '\0'])
 }
 impl Config {
+    pub fn shared_second_display(&self) -> Option<&SecondDisplay> {
+        if self.mode == OperationMode::Sharing && self.display_method == DisplayMethod::Ddc {
+            self.second_display.as_ref()
+        } else {
+            None
+        }
+    }
+
     pub fn validate(&self) -> Result<()> {
         ensure!(clean(&self.output_id, 128), "显示输出标识无效");
         if self.display_method == DisplayMethod::Signal {
@@ -164,6 +183,18 @@ impl Config {
                 || self.local_input != self.peer_input,
             "两端输入源不能相同"
         );
+        if let Some(second) = self.shared_second_display() {
+            ensure!(
+                !second.display_id.is_empty()
+                    && clean(&second.display_id, 512)
+                    && !second.display_id.eq_ignore_ascii_case(&self.display_id),
+                "请选择不同的第二台共享显示器"
+            );
+            ensure!(
+                second.local_input != second.peer_input,
+                "第二台显示器的两端输入源不能相同"
+            );
+        }
         ensure!(
             (1..=32).contains(&self.clipboard_megabytes),
             "剪贴板大小无效"
@@ -248,6 +279,8 @@ pub struct Identity {
     pub role: String,
     pub local_input: u16,
     pub peer_input: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub second_display_inputs: Option<[u16; 2]>,
     pub shortcut: String,
     #[serde(default)]
     pub modifier_mapping: ModifierMapping,
@@ -288,6 +321,12 @@ impl Identity {
             self.display_method != DisplayMethod::Signal
                 || self.output_protocol == crate::output_guard::PROTOCOL,
             "对端自动选源协议无效"
+        );
+        ensure!(
+            self.second_display_inputs.is_none_or(|[local, peer]| {
+                self.display_method == DisplayMethod::Ddc && local != peer
+            }),
+            "对端第二台显示器的输入源映射无效"
         );
         let c = Config {
             display_method: self.display_method,

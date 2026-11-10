@@ -5,7 +5,12 @@ export type TestStatus = 'idle' | 'sending' | 'sent' | 'confirmed' | 'mismatch' 
 export type InputTarget = 'local' | 'peer'
 export function useDisplayTest(config: () => Config, execute: ActionRunner) {
   const signature = computed(() =>
-    JSON.stringify([config().displayId, config().localInput, config().peerInput]),
+    JSON.stringify([
+      config().displayId,
+      config().localInput,
+      config().peerInput,
+      config().secondDisplay,
+    ]),
   )
   let generation = 0
   const results = ref<Record<InputTarget, TestStatus>>({ local: 'idle', peer: 'idle' })

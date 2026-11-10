@@ -49,6 +49,17 @@ export const configSchema = z.preprocess(
         .refine((v) => !/[\r\n\0]/.test(v)),
       localInput: z.number().int().min(0).max(65535).nullable(),
       peerInput: z.number().int().min(0).max(65535).nullable(),
+      secondDisplay: z
+        .object({
+          displayId: z
+            .string()
+            .max(512)
+            .refine((v) => !/[\r\n\0]/.test(v)),
+          localInput: z.number().int().min(0).max(65535).nullable(),
+          peerInput: z.number().int().min(0).max(65535).nullable(),
+        })
+        .strict()
+        .optional(),
       shortcut: z.string().regex(/^(control\+alt\+(shift\+)?)(F(?:[1-9]|1[0-7]))$/),
       modifierMapping: z.enum(['original', 'common']).default('original'),
       windowsSecureInput: z.boolean().default(false),
@@ -73,6 +84,18 @@ export const configSchema = z.preprocess(
         ctx.addIssue({ code: 'custom', message: '控制端口和键鼠端口必须不同' })
       if (c.displayMethod === 'ddc' && c.localInput !== null && c.localInput === c.peerInput)
         ctx.addIssue({ code: 'custom', message: '两台电脑的输入源数值必须不同' })
+      const second = c.secondDisplay
+      if (second && (second.localInput === null || second.peerInput === null))
+        ctx.addIssue({ code: 'custom', message: '请填写第二台显示器的两个输入源' })
+      if (
+        c.mode === 'sharing' &&
+        c.displayMethod === 'ddc' &&
+        second &&
+        (!second.displayId ||
+          second.displayId.toLowerCase() === c.displayId.toLowerCase() ||
+          second.localInput === second.peerInput)
+      )
+        ctx.addIssue({ code: 'custom', message: '请选择不同的第二台显示器，并填写不同的输入源' })
     }),
 )
 
