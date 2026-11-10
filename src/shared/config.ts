@@ -57,6 +57,7 @@ export const configSchema = z.preprocess(
             .refine((v) => !/[\r\n\0]/.test(v)),
           localInput: z.number().int().min(0).max(65535).nullable(),
           peerInput: z.number().int().min(0).max(65535).nullable(),
+          autoSource: z.boolean().optional(),
         })
         .strict()
         .optional(),
@@ -85,6 +86,8 @@ export const configSchema = z.preprocess(
       if (c.displayMethod === 'ddc' && c.localInput !== null && c.localInput === c.peerInput)
         ctx.addIssue({ code: 'custom', message: '两台电脑的输入源数值必须不同' })
       const second = c.secondDisplay
+      if (second?.autoSource && c.crossScreenVideo !== 'manual')
+        ctx.addIssue({ code: 'custom', message: '第二屏自动选源仅允许快捷键或按钮切换画面' })
       if (second && (second.localInput === null || second.peerInput === null))
         ctx.addIssue({ code: 'custom', message: '请填写第二台显示器的两个输入源' })
       if (

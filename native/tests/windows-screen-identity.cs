@@ -59,6 +59,43 @@ public static class WindowsScreenIdentityTests {
     try { ScreenBridgeNative.StableScreenId(new string[0]); }
     catch(System.Exception) { rejected = true; }
     Check(rejected, "Missing stable identity silently fell back to an unstable handle");
-    System.Console.WriteLine("Windows identity, signal sleep selection, single-output support, multi/clone rejection and zero-distance wake INPUT passed; no native calls");
+    string ddcBefore=ScreenBridgeNative.StableDdcId(new string[] {path},0);
+    string ddcAfter=ScreenBridgeNative.StableDdcId(new string[] {path.ToLowerInvariant()},0);
+    string ddcOther=ScreenBridgeNative.StableDdcId(new string[] {other},0);
+    Check(ddcBefore==ddcAfter,"DDC identity changed after display renumbering");
+    Check(ddcBefore!=ddcOther,"Same-model DDC monitors share an identity");
+    Check(ddcBefore!=ScreenBridgeNative.StableDdcId(new string[] {path},1),"Physical monitor index was lost");
+    var aliases=new System.Collections.Generic.Dictionary<string,string>(System.StringComparer.OrdinalIgnoreCase);
+    ScreenBridgeNative.RememberDdcAlias(aliases,@"\\.\DISPLAY1#0",ddcBefore);
+    ScreenBridgeNative.RememberDdcAlias(aliases,@"\\.\DISPLAY2#0",ddcOther);
+    // Switching the first monitor can exchange the live DISPLAY numbers. Old
+    // settings must still resolve to the physical targets captured beforehand.
+    ScreenBridgeNative.RememberDdcAlias(aliases,@"\\.\DISPLAY1#0",ddcOther);
+    ScreenBridgeNative.RememberDdcAlias(aliases,@"\\.\DISPLAY2#0",ddcBefore);
+    Check(ScreenBridgeNative.ResolveDdcId(aliases,@"\\.\display1#0")==ddcBefore,"First DDC alias followed a reordered display number");
+    Check(ScreenBridgeNative.ResolveDdcId(aliases,@"\\.\DISPLAY2#0")==ddcOther,"Second DDC alias followed a reordered display number");
+    Check(ScreenBridgeNative.ResolveDdcId(aliases,ddcOther)==ddcOther,"Stable saved DDC ID changed");
+    int attempts=0, waits=0;
+    ScreenBridgeNative.RetryDdcWrite(delegate {attempts++;},delegate(int ms) {waits++;});
+    Check(attempts==1 && waits==0,"Successful DDC writes were repeated or delayed");
+    attempts=0;
+    ScreenBridgeNative.RetryDdcWrite(delegate {
+      attempts++;
+      if(attempts<3) throw new System.ComponentModel.Win32Exception(1167,"Transient display topology change");
+    },delegate(int ms) {Check(ms==100 || ms==200,"Unexpected retry delay"); waits++;});
+    Check(attempts==3 && waits==2,"Transient DDC failures were not retried with a bound");
+    attempts=0; waits=0;
+    bool exhausted=false;
+    try {
+      ScreenBridgeNative.RetryDdcWrite(delegate {attempts++;throw new System.ComponentModel.Win32Exception(5,"DDC rejected");},delegate(int ms) {waits++;});
+    } catch(System.ComponentModel.Win32Exception error) {exhausted=error.NativeErrorCode==5;}
+    Check(exhausted && attempts==3 && waits==2,"Repeated DDC failure lost the error or exceeded the retry limit");
+    attempts=0; waits=0;
+    bool invalid=false;
+    try {
+      ScreenBridgeNative.RetryDdcWrite(delegate {attempts++;throw new System.ArgumentException("Invalid target");},delegate(int ms) {waits++;});
+    } catch(System.ArgumentException) {invalid=true;}
+    Check(invalid && attempts==1 && waits==0,"Invalid DDC selection was retried");
+    System.Console.WriteLine("Windows stable DDC identity, legacy alias renumbering, bounded native retries, signal selection and INPUT ABI passed; no native calls");
   }
 }

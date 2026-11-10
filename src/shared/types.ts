@@ -24,6 +24,7 @@ export interface Config {
     displayId: string
     localInput: number | null
     peerInput: number | null
+    autoSource?: boolean
   }
   shortcut: string
   modifierMapping: ModifierMapping

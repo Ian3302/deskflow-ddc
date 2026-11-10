@@ -556,6 +556,10 @@ impl Runtime {
     pub async fn save(&self, c: Config) -> Result<()> {
         c.validate()?;
         let _lifecycle = self.start_stop.lock().await;
+        ensure!(!self.snapshot().await.running, "请先停止共享，再修改配置");
+        // A stopped input test may still own a disabled output. Recover its
+        // captured baseline before changing the selected display or method.
+        self.restore_local_output().await?;
         {
             let mut i = self.inner.lock().await;
             ensure!(!i.state.running, "请先停止共享，再修改配置");
@@ -729,6 +733,22 @@ impl Runtime {
         let state = self.snapshot().await;
         let c = state.config;
         c.ready()?;
+        if let Some(second) = c
+            .shared_second_display()
+            .filter(|s| s.auto_source == Some(true))
+        {
+            self.restore_local_output().await?;
+            let baseline = self.platform.capture_output(&second.display_id).await?;
+            ensure!(
+                c.retained_display_id.is_empty()
+                    || baseline["target"]["id"]
+                        .as_u64()
+                        .map(|id| id.to_string())
+                        .as_deref()
+                        != Some(c.retained_display_id.as_str()),
+                "第二屏自动选源不能停用所选独立屏幕"
+            );
+        }
         if c.display_method == DisplayMethod::Signal {
             self.check_output_selection(&c).await?;
         }
@@ -1241,6 +1261,7 @@ mod tests {
                 display_id: "second".into(),
                 local_input: 18,
                 peer_input: 3,
+                auto_source: None,
             }),
             ..Config::default()
         };

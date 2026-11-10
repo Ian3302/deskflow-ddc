@@ -21,6 +21,39 @@ public static class ScreenBridgeNative {
     [MarshalAs(UnmanagedType.ByValTStr, SizeConst=128)] public string key;
   }
   public class Item { public string id; public string name; public uint? currentInput; public bool readable; }
+  // Legacy DISPLAY numbers can move after the first screen switches inputs.
+  // Bind all observed legacy IDs once per helper session, before any write.
+  private static readonly Dictionary<string,string> ddcAliases = new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase);
+  public static string StableDdcId(IEnumerable<string> interfaces, int physicalIndex) {
+    if(physicalIndex<0) throw new ArgumentOutOfRangeException("physicalIndex");
+    return StableScreenId(interfaces)+"#"+physicalIndex;
+  }
+  public static void RememberDdcAlias(IDictionary<string,string> aliases, string legacy, string stable) {
+    if(!aliases.ContainsKey(legacy)) aliases.Add(legacy,stable);
+  }
+  public static string ResolveDdcId(IDictionary<string,string> aliases, string selected) {
+    string stable;
+    return aliases.TryGetValue(selected,out stable) ? stable : selected;
+  }
+  public static void RetryDdcWrite(Action write, Action<int> wait) {
+    for(int attempt=0;attempt<3;attempt++) {
+      try { write(); return; }
+      catch(Win32Exception) {
+        if(attempt==2) throw;
+        wait(100*(attempt+1));
+      }
+    }
+  }
+  public static void SetInput(string selected, int value) {
+    if(String.IsNullOrEmpty(selected) || value<0 || value>65535) throw new ArgumentException("Invalid monitor/input selection");
+    if(!selected.StartsWith("win-monitor-",StringComparison.OrdinalIgnoreCase)) {
+      if(!ddcAliases.ContainsKey(selected)) Monitors("",null);
+      selected=ResolveDdcId(ddcAliases,selected);
+    }
+    // Keep one physical target while resolving fresh handles on each attempt.
+    // Successful writes return immediately, without delaying normal switching.
+    RetryDdcWrite(delegate { Monitors(selected,value); },delegate(int milliseconds) { System.Threading.Thread.Sleep(milliseconds); });
+  }
   [StructLayout(LayoutKind.Sequential)] public struct Luid { public uint low; public int high; }
   [StructLayout(LayoutKind.Sequential)] public struct Source { public Luid adapter; public uint id, mode, status; }
   [StructLayout(LayoutKind.Sequential)] public struct Rate { public uint numerator, denominator; }
@@ -177,6 +210,12 @@ public static class ScreenBridgeNative {
     if(SendInput((uint)inputs.Count, inputs.ToArray(), Marshal.SizeOf(typeof(Input))) != inputs.Count) throw new Win32Exception(Marshal.GetLastWin32Error());
   }
   public static List<Item> Monitors(string selected, int? value) {
+    // Seed aliases for BOTH screens before changing either input. Subsequent
+    // writes resolve the saved identity against freshly enumerated handles.
+    if(value.HasValue && !String.IsNullOrEmpty(selected) && !selected.StartsWith("win-monitor-",StringComparison.OrdinalIgnoreCase)) {
+      if(!ddcAliases.ContainsKey(selected)) Monitors("",null);
+      selected=ResolveDdcId(ddcAliases,selected);
+    }
     var result = new List<Item>(); Exception failure=null; bool matched=false;
     Callback callback = delegate(IntPtr monitor, IntPtr hdc, IntPtr rect, IntPtr data) {
       uint count; if(!GetNumberOfPhysicalMonitorsFromHMONITOR(monitor,out count)) return true;
@@ -184,11 +223,14 @@ public static class ScreenBridgeNative {
       try {
         var info=new MonitorInfo {size=Marshal.SizeOf(typeof(MonitorInfo))};
         if(!GetMonitorInfo(monitor,ref info)) return true;
+        var interfaces=MonitorInterfaces(info.device);
         for(int i=0;i<count;i++) {
-          string id=info.device+"#"+i;
+          string legacy=info.device+"#"+i;
+          string id=StableDdcId(interfaces,i);
+          RememberDdcAlias(ddcAliases,legacy,id);
           if(value.HasValue) {
             if(id==selected) { matched=true; if(!SetVCPFeature(physical[i].handle,0x60,(uint)value.Value)) failure=new Win32Exception(Marshal.GetLastWin32Error(), "DDC input write failed"); }
-          } else if(String.IsNullOrEmpty(selected) || id==selected) {
+          } else if(String.IsNullOrEmpty(selected) || id==ResolveDdcId(ddcAliases,selected)) {
             uint type,current,max; bool readable=GetVCPFeatureAndVCPFeatureReply(physical[i].handle,0x60,out type,out current,out max);
             result.Add(new Item { id=id,name=physical[i].description,currentInput=readable?(uint?)current:null,readable=readable });
           }
@@ -198,7 +240,7 @@ public static class ScreenBridgeNative {
     };
     if(!EnumDisplayMonitors(IntPtr.Zero,IntPtr.Zero,callback,IntPtr.Zero)) throw new Win32Exception(Marshal.GetLastWin32Error());
     if(failure!=null) throw failure;
-    if(value.HasValue && !matched) throw new Exception("Selected monitor is not connected");
+    if(value.HasValue && !matched) throw new Win32Exception(1167,"Selected monitor is not connected; scan and select the same physical monitor again. ID="+selected);
     return result;
   }
 }
@@ -222,7 +264,7 @@ function Invoke-NativeCommand([string]$Command, [string]$Monitor, [int]$InputVal
     'screens' { $items = [ScreenBridgeNative]::Screens(); return ,@($items.ToArray()) }
     'list' { $items = [ScreenBridgeNative]::Monitors('', $null); return ,@($items.ToArray()) }
     'get' { $items = [ScreenBridgeNative]::Monitors($Monitor, $null); if ($items.Count -eq 1) { return $items[0].currentInput }; return $null }
-    'set' { if ($InputValue -lt 0 -or $InputValue -gt 65535) { throw 'Invalid input value' }; [void][ScreenBridgeNative]::Monitors($Monitor, $InputValue); return @{ sent = $true } }
+    'set' { [ScreenBridgeNative]::SetInput($Monitor, $InputValue); return @{ sent = $true } }
     'host' { [ScreenBridgeNative]::Hotkey($true); return @{ sent = $true } }
     'pointer' { [ScreenBridgeNative]::Position($PointerX, $PointerY); return @{ positioned = $true } }
     'peer' { [ScreenBridgeNative]::Hotkey($false); return @{ sent = $true } }
