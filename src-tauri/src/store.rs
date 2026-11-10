@@ -215,6 +215,23 @@ mod tests {
         assert_eq!(restored.startup, crate::startup::Preferences::default());
     }
     #[test]
+    fn loads_existing_windows_dual_display_settings_without_rewriting_them() {
+        let mut saved = serde_json::to_value(unpaired()).unwrap();
+        saved["config"]["displayId"] = serde_json::json!(r"\\.\DISPLAY1#0");
+        saved["config"]["localInput"] = serde_json::json!(18);
+        saved["config"]["peerInput"] = serde_json::json!(17);
+        saved["config"]["secondDisplay"] = serde_json::json!({
+            "displayId":r"\\.\DISPLAY2#0", "localInput":15, "peerInput":18
+        });
+        let bytes = serde_json::to_vec(&saved).unwrap();
+        let restored = decode_settings(&bytes).unwrap();
+        let second = restored.config.shared_second_display().unwrap();
+        assert_eq!(second.display_id, r"\\.\DISPLAY2#0");
+        assert_eq!([second.local_input, second.peer_input], [15, 18]);
+        assert_eq!(second.auto_source, None);
+        assert_eq!(serde_json::to_value(restored).unwrap(), saved);
+    }
+    #[test]
     fn completes_old_interrupted_initialization_without_changing_settings() {
         let dir = tempfile::tempdir().unwrap();
         let value = unpaired();

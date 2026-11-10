@@ -126,6 +126,16 @@ impl Runtime {
         second: bool,
     ) -> Result<Value> {
         let local = target == s.device_id;
+        if let Some(mapping) = s
+            .config
+            .shared_second_display()
+            .filter(|mapping| second && mapping.auto_source == Some(true))
+        {
+            self.second_auto_source_input(&s.config, local, true)
+                .await?;
+            return Ok(json!({"monitor":mapping.display_id,
+                "method":"auto-source","commandAccepted":true,"pictureVerified":false}));
+        }
         let (monitor, value) = if second {
             let mapping = s
                 .config
@@ -841,7 +851,14 @@ impl Runtime {
             } else {
                 second.peer_input
             };
-            let secondary = self.platform.input(&second.display_id, second_value).await;
+            let secondary = if second.auto_source == Some(true) {
+                // Test writes retain the guardian's deadline, so an unanswered
+                // test restores the output without committing a sharing session.
+                self.second_auto_source_input(&s.config, label == "local", false)
+                    .await
+            } else {
+                self.platform.input(&second.display_id, second_value).await
+            };
             primary
                 .context("第一台显示器指令失败")
                 .and(secondary.context("第二台显示器指令失败"))
@@ -890,6 +907,42 @@ mod dual_display_tests {
     use super::*;
     use crate::runtime::pointer_bridge::tests::{attach_with_requests, fixture};
 
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn second_auto_source_restores_its_lease_without_requiring_ddc() {
+        let directory = tempfile::tempdir().unwrap();
+        let runtime = fixture(directory.path(), "client");
+        {
+            let mut inner = runtime.inner.lock().await;
+            inner.state.config.second_display = Some(crate::model::SecondDisplay {
+                display_id: uuid::Uuid::new_v4().to_string(),
+                local_input: 18,
+                peer_input: 15,
+                auto_source: Some(true),
+            });
+        }
+        *runtime.output_lease.lock().await =
+            Some(crate::output_guard::tests::retrying_lease(directory.path(), 0).await);
+        let state = runtime.snapshot().await;
+        // The fixture has no native DDC binaries. Returning to Mac must use
+        // the original guardian baseline even if the output is not enumerable.
+        let result = runtime
+            .write_ddc_input(&state, &state.device_id, true)
+            .await
+            .unwrap();
+        assert_eq!(result["method"], "auto-source");
+        assert_eq!(result["pictureVerified"], false);
+        assert!(runtime.output_lease.lock().await.is_none());
+        runtime
+            .write_ddc_input(&state, &state.device_id, true)
+            .await
+            .unwrap();
+        assert!(runtime
+            .write_ddc_input(&state, &state.device_id, false)
+            .await
+            .is_err());
+    }
+
     #[tokio::test]
     async fn partial_ddc_write_keeps_routing_uncertain_until_both_screens_accept() {
         let directory = tempfile::tempdir().unwrap();
@@ -903,6 +956,7 @@ mod dual_display_tests {
                 display_id: String::new(),
                 local_input: 18,
                 peer_input: 3,
+                auto_source: None,
             });
         let expected = target.clone();
         let receiver = tokio::spawn(async move {

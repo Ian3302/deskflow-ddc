@@ -250,6 +250,23 @@ const testReason = computed(() =>
               >
                 移除第二台显示器
               </button>
+              <template v-if="state.platform === 'darwin'">
+                <label class="field">
+                  <span>
+                    <input
+                      v-model="draft.secondDisplay.autoSource"
+                      type="checkbox"
+                      :disabled="locked"
+                      @change="draft.crossScreenVideo = 'manual'"
+                    />
+                    第二屏使用自动选源兼容模式
+                  </span>
+                </label>
+                <p>
+                  切到另一台电脑时暂时停用 Mac 的第二路输出，切回 Mac 时恢复。
+                  需要显示器支持自动选源，并保留另一块活动屏幕。停止共享或连接断开后会恢复输出。
+                </p>
+              </template>
             </div>
             <button
               v-else

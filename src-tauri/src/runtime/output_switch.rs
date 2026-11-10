@@ -135,11 +135,16 @@ impl Runtime {
             s.config.display_method == DisplayMethod::Signal,
             "本机未启用自动选源兜底"
         );
+        self.local_output_action_on(&s.config.output_id, operation)
+            .await
+    }
+
+    async fn local_output_action_on(&self, output: &str, operation: &str) -> Result<()> {
         match operation {
             "enable" => {
                 self.restore_local_output().await?;
                 // Presence is a readiness check only; never picture verification.
-                self.platform.capture_output(&s.config.output_id).await?;
+                self.platform.capture_output(output).await?;
             }
             "disable" => {
                 let mut guard = self.output_lease.lock().await;
@@ -148,11 +153,8 @@ impl Runtime {
                     // physical input change. Re-arm the pre-commit recovery deadline.
                     return lease.command("disable").await;
                 }
-                let mut lease = crate::output_guard::Lease::start(
-                    &self.platform.resources,
-                    &s.config.output_id,
-                )
-                .await?;
+                let mut lease =
+                    crate::output_guard::Lease::start(&self.platform.resources, output).await?;
                 // Keep the lease even on partial failure; callers restore both
                 // endpoints, and dropping this Runtime delivers EOF independently.
                 let result = lease.command("disable").await;
@@ -173,9 +175,46 @@ impl Runtime {
         }
         self.trace(
             "output.operation",
-            json!({"operation":operation,"output":s.config.output_id,"pictureVerified":false}),
+            json!({"operation":operation,"output":output,"pictureVerified":false}),
         )
         .await;
+        Ok(())
+    }
+
+    pub(super) async fn second_auto_source_input(
+        &self,
+        config: &Config,
+        local: bool,
+        commit: bool,
+    ) -> Result<()> {
+        let second = config
+            .shared_second_display()
+            .context("未配置第二台共享显示器")?;
+        ensure!(
+            platform() == "darwin" && second.auto_source == Some(true),
+            "第二屏未启用自动选源兼容模式"
+        );
+        if local {
+            return self.restore_local_output().await;
+        }
+        let result = async {
+            self.local_output_action_on(&second.display_id, "disable")
+                .await?;
+            if commit {
+                self.local_output_action_on(&second.display_id, "confirm")
+                    .await?;
+            }
+            Ok(())
+        }
+        .await;
+        if let Err(error) = result {
+            // A failed native call can still have partially disabled the output.
+            let recovery = self.restore_local_output().await;
+            return match recovery {
+                Ok(()) => Err(error),
+                Err(recovery) => Err(error).context(format!("第二屏恢复失败：{recovery:#}")),
+            };
+        }
         Ok(())
     }
 

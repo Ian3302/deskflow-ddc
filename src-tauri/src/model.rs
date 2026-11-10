@@ -60,6 +60,8 @@ pub struct SecondDisplay {
     pub display_id: String,
     pub local_input: u16,
     pub peer_input: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_source: Option<bool>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -184,6 +186,14 @@ impl Config {
             "两端输入源不能相同"
         );
         if let Some(second) = self.shared_second_display() {
+            if second.auto_source == Some(true) {
+                ensure!(platform() == "darwin", "第二屏自动选源仅支持 macOS");
+                ensure!(
+                    self.cross_screen_video == "manual",
+                    "第二屏自动选源仅允许快捷键或按钮切换画面"
+                );
+                uuid::Uuid::parse_str(&second.display_id)?;
+            }
             ensure!(
                 !second.display_id.is_empty()
                     && clean(&second.display_id, 512)
