@@ -90,6 +90,8 @@ pub struct Config {
     pub shortcut: String,
     #[serde(default)]
     pub modifier_mapping: ModifierMapping,
+    #[serde(default = "default_mouse_speed")]
+    pub receiver_mouse_speed: f64,
     #[serde(default)]
     pub windows_secure_input: bool,
     pub clipboard: bool,
@@ -98,6 +100,10 @@ pub struct Config {
     pub cross_screen_video: String,
     pub retained_display_id: String,
 }
+fn default_mouse_speed() -> f64 {
+    1.0
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -123,6 +129,7 @@ impl Default for Config {
             second_display: None,
             shortcut: "control+alt+F10".into(),
             modifier_mapping: ModifierMapping::Original,
+            receiver_mouse_speed: 1.0,
             windows_secure_input: false,
             clipboard: true,
             clipboard_megabytes: 4,
@@ -145,6 +152,11 @@ impl Config {
     }
 
     pub fn validate(&self) -> Result<()> {
+        ensure!(
+            self.receiver_mouse_speed.is_finite()
+                && (0.5..=2.0).contains(&self.receiver_mouse_speed),
+            "接收端鼠标速度必须在 0.5 到 2 倍之间"
+        );
         ensure!(clean(&self.output_id, 128), "显示输出标识无效");
         if self.display_method == DisplayMethod::Signal {
             ensure!(
@@ -294,6 +306,8 @@ pub struct Identity {
     pub shortcut: String,
     #[serde(default)]
     pub modifier_mapping: ModifierMapping,
+    #[serde(default = "default_mouse_speed")]
+    pub receiver_mouse_speed: f64,
     pub clipboard: bool,
     pub clipboard_megabytes: u8,
     pub deskflow_port: u16,
@@ -346,6 +360,7 @@ impl Identity {
             peer_input: Some(self.peer_input),
             shortcut: self.shortcut.clone(),
             modifier_mapping: self.modifier_mapping,
+            receiver_mouse_speed: self.receiver_mouse_speed,
             clipboard_megabytes: self.clipboard_megabytes,
             deskflow_port: self.deskflow_port,
             layout_side: self.layout_side.clone(),
@@ -364,6 +379,36 @@ pub fn valid_fingerprint(s: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn mouse_speed_migrates_and_rejects_invalid_local_values() {
+        let mut value = serde_json::to_value(Config::default()).unwrap();
+        value.as_object_mut().unwrap().remove("receiverMouseSpeed");
+        let config: Config = serde_json::from_value(value).unwrap();
+        assert_eq!(config.receiver_mouse_speed, 1.0);
+        for speed in [
+            0.5,
+            0.75,
+            1.0,
+            1.35,
+            2.0,
+            0.49,
+            2.01,
+            f64::INFINITY,
+            f64::NAN,
+        ] {
+            let valid = speed.is_finite() && (0.5..=2.0).contains(&speed);
+            assert_eq!(
+                Config {
+                    receiver_mouse_speed: speed,
+                    ..config.clone()
+                }
+                .validate()
+                .is_ok(),
+                valid
+            );
+        }
+    }
+
     #[test]
     fn legacy_config_defaults_to_original_modifiers_and_rejects_unknown_modes() {
         let mut config = serde_json::to_value(Config::default()).unwrap();

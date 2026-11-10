@@ -28,6 +28,7 @@ impl Runtime {
             c.layout_side = peer.layout_side.clone();
             c.cross_screen_video = peer.cross_screen_video.clone();
         }
+        let c = engine::session_mouse_config(&c, peer);
         let settings = engine::prepare(&c, &id, peer, &dir, &address.to_string())?;
         let binary = self.binary(&c)?;
         let (tx, mut rx) = mpsc::channel(64);

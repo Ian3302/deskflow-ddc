@@ -33,6 +33,19 @@ describe('desktop frontend configuration', () => {
     expect(configSchema.safeParse({ ...config, modifierMapping: 'invalid' }).success).toBe(false)
   })
 
+  it('migrates mouse speed and validates saved receiver preferences', () => {
+    const config = defaultConfig('receiver')
+    const { receiverMouseSpeed: _, ...legacy } = config
+    expect(configSchema.parse(legacy).receiverMouseSpeed).toBe(1)
+    for (const receiverMouseSpeed of [0.5, 0.75, 1, 1.35, 2]) {
+      const action = actionSchema.parse({ type: 'save', config: { ...config, receiverMouseSpeed } })
+      expect(action.type === 'save' && action.config.receiverMouseSpeed).toBe(receiverMouseSpeed)
+    }
+    for (const receiverMouseSpeed of [0, 0.49, 2.01, -1, NaN, Infinity, '1']) {
+      expect(configSchema.safeParse({ ...config, receiverMouseSpeed }).success).toBe(false)
+    }
+  })
+
   it('rejects conflicting ports and identical video inputs', () => {
     const config = defaultConfig('desktop')
     expect(configSchema.safeParse({ ...config, controlPort: config.deskflowPort }).success).toBe(

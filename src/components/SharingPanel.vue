@@ -112,6 +112,7 @@ const label = (value: string) =>
         v-model:side="draft.layoutSide"
         v-model:video="draft.crossScreenVideo"
         v-model:retained="draft.retainedDisplayId"
+        v-model:speed="draft.receiverMouseSpeed"
         :locked="locked"
         :is-host="isHost"
         :state="state"
