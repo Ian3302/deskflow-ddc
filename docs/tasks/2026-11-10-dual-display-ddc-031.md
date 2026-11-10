@@ -19,7 +19,8 @@
 - [x] 修复 Windows DDC 稳定身份、旧编号映射与失败重试
 - [x] 同步构建资源，统一版本为 0.3.1
 - [x] 在任务 worktree 中复核验证并提交
-- [ ] 创建 PR、检查 CI 并合并
+- [x] 创建 PR
+- [ ] 检查 CI 并合并
 
 ## 修改与关键决策
 
@@ -49,7 +50,7 @@ Windows 实际 API、安装包和 macOS 桌面全特性检查交由 PR CI。原�
 
 ## PR 与状态
 
-待创建。
+PR https://github.com/Ian3302/deskflow-ddc/pull/1 已创建并推送，等待远端检查及合并。
 
 ## 遗留问题
 
