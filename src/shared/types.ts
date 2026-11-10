@@ -28,6 +28,7 @@ export interface Config {
   }
   shortcut: string
   modifierMapping: ModifierMapping
+  receiverMouseSpeed: number
   windowsSecureInput: boolean
   clipboard: boolean
   clipboardMegabytes: number
