@@ -222,7 +222,7 @@ async fn dispatch(app: &tauri::AppHandle, runtime: &Arc<Runtime>, action: Action
         Action::SaveStartup { settings } => startup::save(app, runtime, settings).await,
         Action::CheckStartup {} => startup::refresh(app, runtime).await,
         Action::Save { config } => runtime.save(config).await,
-        Action::Start { pairing_code } => runtime.start(pairing_code).await,
+        Action::Start { pairing_code } => runtime.start_shared(pairing_code).await,
         Action::Switch { target } => {
             ensure!(["local", "peer"].contains(&target.as_str()), "切换目标无效");
             runtime.switch_to(target == "local").await

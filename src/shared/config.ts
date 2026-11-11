@@ -17,6 +17,7 @@ export const configSchema = z.preprocess(
   },
   z
     .object({
+      allowRemoteStart: z.boolean().default(true),
       displayMethod: z.enum(['ddc', 'signal']).default('ddc'),
       outputId: z
         .string()
@@ -82,8 +83,11 @@ export const configSchema = z.preprocess(
           code: 'custom',
           message: '自动选源兜底需要联网共享，画面仅由快捷键或按钮切换',
         })
-      if (c.controlPort === c.deskflowPort)
-        ctx.addIssue({ code: 'custom', message: '控制端口和键鼠端口必须不同' })
+      if (
+        c.controlPort === c.deskflowPort ||
+        (c.controlPort === 65535 ? 65534 : c.controlPort + 1) === c.deskflowPort
+      )
+        ctx.addIssue({ code: 'custom', message: '控制端口、待命端口和键鼠端口必须不同' })
       if (c.displayMethod === 'ddc' && c.localInput !== null && c.localInput === c.peerInput)
         ctx.addIssue({ code: 'custom', message: '两台电脑的输入源数值必须不同' })
       const second = c.secondDisplay
@@ -106,6 +110,7 @@ export const configSchema = z.preprocess(
 /** Frontend-only initial state; the desktop backend supplies persisted settings. */
 export function defaultConfig(deviceName: string): Config {
   return {
+    allowRemoteStart: true,
     displayMethod: 'ddc',
     outputId: '',
     mode: 'sharing',

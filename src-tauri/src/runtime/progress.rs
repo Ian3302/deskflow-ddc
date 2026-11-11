@@ -48,6 +48,11 @@ impl Runtime {
     /// Native output operations finish under their existing deadlines and locks;
     /// never drop a half-applied display operation and race it with restoration.
     pub async fn emergency_stop(&self) -> Result<()> {
+        let result = self.emergency_stop_local().await;
+        self.notify_peer_stop().await;
+        result
+    }
+    pub(super) async fn emergency_stop_local(&self) -> Result<()> {
         self.interrupt_switch_wait();
         {
             let mut i = self.inner.lock().await;
@@ -67,7 +72,7 @@ impl Runtime {
         }
         self.topology_ready.send_replace(true);
         let _action = self.actions.lock().await;
-        let result = self.stop().await;
+        let result = self.stop_local().await;
         {
             let mut i = self.inner.lock().await;
             i.state.emergency_stopping = false;

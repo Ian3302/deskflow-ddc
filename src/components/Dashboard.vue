@@ -126,7 +126,7 @@ const shortcut = computed(() =>
       <div class="section-heading">
         <h2 id="setup-title">{{ state.running ? '连接准备' : '开始使用' }}</h2>
         <span>{{
-          displayOnly ? '完成配置后，点击上方启用显示器切换' : '完成配置后，在设备页开始共享'
+          displayOnly ? '完成配置后，点击上方启用显示器切换' : '完成配对后，点击右上角开启共享'
         }}</span>
       </div>
       <div class="setup-steps">

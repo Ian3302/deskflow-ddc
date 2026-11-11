@@ -4,6 +4,16 @@ import { actionSchema } from '../src/shared/actions'
 import { displayMappingValid } from '../src/shared/workspace'
 
 describe('desktop frontend configuration', () => {
+  it('defaults saved pairings to remote start and preserves explicit opt-out', () => {
+    const config = defaultConfig('desktop')
+    const { allowRemoteStart: _, ...legacy } = config
+    expect(configSchema.parse(legacy).allowRemoteStart).toBe(true)
+    expect(configSchema.parse({ ...config, allowRemoteStart: false }).allowRemoteStart).toBe(false)
+    expect(
+      configSchema.safeParse({ ...config, deskflowPort: config.controlPort + 1 }).success,
+    ).toBe(false)
+  })
+
   it('starts with manual video switching and the 0.2 ports', () => {
     const config = defaultConfig('desktop')
     expect(configSchema.parse(config)).toEqual(config)

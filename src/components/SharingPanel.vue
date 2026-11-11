@@ -47,6 +47,18 @@ const label = (value: string) =>
     <SettingsLock v-if="state.running" :busy="busy" @stop="emit('action', { type: 'stop' })" />
     <form @submit.prevent="emit('action', { type: 'save', config: value() })">
       <div class="panel">
+        <label class="setting-row">
+          <div>
+            <strong>允许已配对电脑开启共享</strong>
+            <p>
+              另一台电脑点击开启后，本机按已保存配置自动启动。两端 App
+              需保持运行；任意一端停止会通知另一端停止并恢复输出。
+            </p>
+          </div>
+          <input v-model="draft.allowRemoteStart" type="checkbox" :disabled="locked" />
+        </label>
+      </div>
+      <div class="panel">
         <div class="panel-heading">
           <span class="section-icon"><AppIcon name="keyboard" /></span>
           <div>

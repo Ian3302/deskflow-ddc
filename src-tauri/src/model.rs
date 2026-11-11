@@ -67,6 +67,8 @@ pub struct SecondDisplay {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Config {
+    #[serde(default = "default_remote_start")]
+    pub allow_remote_start: bool,
     #[serde(default)]
     pub display_method: DisplayMethod,
     /// Native display UUID on macOS; stable logical screen ID on Windows.
@@ -100,6 +102,10 @@ pub struct Config {
     pub cross_screen_video: String,
     pub retained_display_id: String,
 }
+fn default_remote_start() -> bool {
+    true
+}
+
 fn default_mouse_speed() -> f64 {
     1.0
 }
@@ -107,6 +113,7 @@ fn default_mouse_speed() -> f64 {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            allow_remote_start: true,
             display_method: DisplayMethod::Ddc,
             output_id: String::new(),
             mode: OperationMode::Sharing,
@@ -184,7 +191,8 @@ impl Config {
         ensure!(
             self.control_port >= 1024
                 && self.deskflow_port >= 1024
-                && self.control_port != self.deskflow_port,
+                && self.control_port != self.deskflow_port
+                && super::runtime::standby_port(self.control_port) != self.deskflow_port,
             "端口无效或重复"
         );
         ensure!(
