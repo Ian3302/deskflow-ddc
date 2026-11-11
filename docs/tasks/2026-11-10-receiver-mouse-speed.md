@@ -67,3 +67,13 @@ Deskflow 固定版本 1.27.0 的 `Server::onMouseMoveSecondary` 已实现 `DESKF
 - `git diff --check` 通过。此次操作仅更新任务文档，应用安装与双机实际手感待用户验证。
 
 本地产物 `/Users/yanchengbin/Desktop/DDC-receiver-mouse-speed/src-tauri/target/release/bundle/macos/Deskflow DDC.app`，约 47.39 MiB。构建源码为鼠标速度分支 `fea465d`，文档后续提交单独记录交付结果。PR #2 继续待合并。
+
+## 2026-11-11 本机安装
+
+用户明确要求直接安装本地构建。计划正常退出当前应用、备份已有应用包、安装到 `/Applications/Deskflow DDC.app` 并启动核验。已完成正常退出、旧包备份、安装和启动。
+
+安装路径 `/Applications/Deskflow DDC.app`。旧包备份 `/Users/yanchengbin/Library/Application Support/Deskflow DDC Backups/2026-11-11-144420/Deskflow DDC.app`。
+
+安装后 `codesign --verify --deep --strict` 通过，应用主体 SHA-256 与本地构建一致。运行进程来自 `/Applications/Deskflow DDC.app`，启动日志确认版本 0.3.1。旧引擎正常停止，退出前输出恢复成功。
+
+新构建启动后辅助功能检查为 false，自动共享被权限检查阻止。已打开 macOS 辅助功能隐私设置页，需用户重新启用 Deskflow DDC 权限，然后在应用中检测并开始共享。尚未完成双机共享手感验证。
