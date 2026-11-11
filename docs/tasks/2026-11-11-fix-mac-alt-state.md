@@ -18,7 +18,7 @@
 - [x] 检查并修正原生切换快捷键的修饰键释放。
 - [x] 增加只包含修饰键状态的诊断；异常现场尚未捕获。
 - [x] 执行原生回归检查，审查完整 diff。
-- [ ] 推送分支并建立 PR。
+- [x] 推送分支并建立草稿 PR。
 
 ## 已知事实与关键决策
 
@@ -33,6 +33,7 @@
 - `node scripts/build-native.mjs`：通过，按生产目标 macOS 14 arm64 编译原生 helper。
 - `git diff --check`：通过。
 - 无前端、Rust 或依赖变更，未在本地重复执行前端/Rust 全量测试；PR CI 状态另行记录。
+- 创建 PR 后查询 `gh pr checks 5` 返回 no checks reported；`gh run list --branch codex/fix-mac-alt-state` 返回空列表，本次没有自动触发 CI，因此不记录为 CI 通过。
 - 用户表示当前不方便复现，已结束临时只读观察，未进行输入注入或安装/重启现有应用。双机故障现场仍待捕获；初始快照的各修饰键均为松开，不能据此排除间歇性故障。
 
 ## 实际修改
@@ -44,7 +45,7 @@
 
 ## PR 与状态
 
-尚未创建；未合并，用户尚未授权合并。
+草稿 PR：https://github.com/Ian3302/deskflow-ddc/pull/5 。代码提交 `c50cfa3`。未合并，用户尚未授权合并；由于尚未证明解决用户的物理 Alt 故障，保持 draft。
 
 ## 遗留事项
 
