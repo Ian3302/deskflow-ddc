@@ -556,10 +556,17 @@ impl Runtime {
     pub async fn save(&self, c: Config) -> Result<()> {
         c.validate()?;
         let _lifecycle = self.start_stop.lock().await;
-        ensure!(!self.snapshot().await.running, "请先停止共享，再修改配置");
-        // A stopped input test may still own a disabled output. Recover its
-        // captured baseline before changing the selected display or method.
-        self.restore_local_output().await?;
+        let state = self.snapshot().await;
+        ensure!(!state.running, "请先停止共享，再修改配置");
+        // Keep recovery attached to its captured baseline while unrelated
+        // settings are saved. Output selection changes still require recovery.
+        if state.config.mode != c.mode
+            || state.config.display_method != c.display_method
+            || state.config.output_id != c.output_id
+            || state.config.second_display != c.second_display
+        {
+            self.restore_local_output().await?;
+        }
         {
             let mut i = self.inner.lock().await;
             ensure!(!i.state.running, "请先停止共享，再修改配置");
@@ -701,6 +708,7 @@ impl Runtime {
                 .map(|second| [second.local_input, second.peer_input]),
             shortcut: c.shortcut.clone(),
             modifier_mapping: c.modifier_mapping,
+            receiver_mouse_speed: c.receiver_mouse_speed,
             clipboard: c.clipboard,
             clipboard_megabytes: c.clipboard_megabytes,
             deskflow_port: c.deskflow_port,
@@ -1240,6 +1248,7 @@ mod tests {
             second_display_inputs: None,
             shortcut: "control+alt+F10".into(),
             modifier_mapping: ModifierMapping::Original,
+            receiver_mouse_speed: 1.0,
             clipboard: true,
             clipboard_megabytes: 4,
             deskflow_port: 24801,

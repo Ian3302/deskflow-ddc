@@ -520,6 +520,49 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn pairing_settings_save_while_failed_output_recovery_keeps_its_baseline() {
+        for role in ["host", "client"] {
+            let dir = tempfile::tempdir().unwrap();
+            let runtime = super::super::pointer_bridge::tests::fixture(dir.path(), role);
+            {
+                let mut i = runtime.inner.lock().await;
+                i.state.running = false;
+                i.state.config.display_method = DisplayMethod::Signal;
+                i.state.config.output_id = "original-output".into();
+                i.store.value.config = i.state.config.clone();
+            }
+            *runtime.output_lease.lock().await =
+                Some(crate::output_guard::tests::retrying_lease(dir.path(), 2).await);
+            assert!(runtime.restore_local_output().await.is_err());
+            let mut config = runtime.snapshot().await.config;
+            config.peer_address = "provider.local".into();
+            config.fallback_ips = vec!["192.168.1.10".parse().unwrap()];
+            runtime.save(config.clone()).await.unwrap();
+            assert_eq!(runtime.snapshot().await.config, config);
+            assert_eq!(runtime.inner.lock().await.store.value.config, config);
+            assert!(runtime.snapshot().await.local_output_recovery_pending);
+            assert!(runtime.output_lease.lock().await.is_some());
+            let calls = dir.path().join("retrying-guardian.calls");
+            assert_eq!(std::fs::read_to_string(&calls).unwrap(), "restore\n");
+
+            // Changing the output still requires the old baseline to recover.
+            let mut replacement = config.clone();
+            replacement.output_id = "replacement-output".into();
+            assert!(runtime.save(replacement).await.is_err());
+            assert_eq!(runtime.snapshot().await.config, config);
+            assert!(runtime.snapshot().await.local_output_recovery_pending);
+            runtime.stop().await.unwrap();
+            assert!(!runtime.snapshot().await.local_output_recovery_pending);
+            assert!(runtime.output_lease.lock().await.is_none());
+            assert_eq!(
+                std::fs::read_to_string(calls).unwrap(),
+                "restore\nrestore\nrestore\n"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn target_readiness_failure_never_disables_the_original_output() {
         use std::sync::Mutex as SyncMutex;

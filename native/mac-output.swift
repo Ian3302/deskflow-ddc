@@ -68,6 +68,26 @@ func resolveOutput(_ saved: OutputPanel, panels: [OutputPanel], enabled: Bool,
     try require(enabled, "外接输出已不可用，未再次停用")
     return saved.id
 }
+// Display transactions can report an error while the asynchronous change is
+// still settling. Confirm the target UUID and retry within the worker timeout.
+func restoreOutput(_ target: OutputPanel, panels: () throws -> [OutputPanel],
+                   enable: () throws -> Void, pause: () -> Void) throws {
+    func isActive() throws -> Bool {
+        try panels().contains { sameUUID($0.uuid, target.uuid) && $0.active }
+    }
+    if try isActive() { return }
+    var nativeFailure = "已请求启用，但原显示器 UUID 尚未恢复"
+    for _ in 0..<2 {
+        do { try enable() }
+        catch { nativeFailure = String(describing: error) }
+        for _ in 0..<15 {
+            if try isActive() { return }
+            pause()
+        }
+        if try isActive() { return }
+    }
+    throw OutputError("\(nativeFailure)；目标输出仍未启用，请检查视频连接并重试恢复")
+}
 final class NativeOutput {
     typealias Configure = @convention(c) (OpaquePointer?, UInt32, Bool) -> Int32
     let library: UnsafeMutableRawPointer
@@ -85,15 +105,24 @@ final class NativeOutput {
         try require(baseline.method == "mac-native-v1" && !baseline.target.internalScreen && !baseline.target.mirrored,
                     "显示输出恢复数据无效")
         let panels = try outputPanels() // Initializes the fresh worker's display connection.
-        // Reasserting an explicit target re-arms the guardian. A source already
-        // absent/inactive needs no second disable, and must never use a stale ID.
         if !enabled && !panels.contains(where: { sameUUID($0.uuid, baseline.target.uuid) && $0.active }) { return }
         var hint: String?
         if let uuid = CGDisplayCreateUUIDFromDisplayID(baseline.target.id) {
             hint = CFUUIDCreateString(nil, uuid.takeRetainedValue()) as String
         }
+        // Validate identity before any native change, including the fallback.
         let id = try resolveOutput(baseline.target, panels: panels, enabled: enabled, savedIDUUID: hint)
-        if !enabled { _ = try captureOutput(baseline.target.uuid, panels: panels) }
+        if enabled {
+            try restoreOutput(baseline.target, panels: outputPanels,
+                              enable: { try self.setEnabled(id, enabled: true) },
+                              pause: { Thread.sleep(forTimeInterval: 0.1) })
+            try restoreLayout(baseline)
+        } else {
+            _ = try captureOutput(baseline.target.uuid, panels: panels)
+            try setEnabled(id, enabled: false)
+        }
+    }
+    func setEnabled(_ id: UInt32, enabled: Bool) throws {
         var config: CGDisplayConfigRef?
         try require(CGBeginDisplayConfiguration(&config) == .success, "无法创建显示输出事务")
         let code = configure(config, id, enabled)
@@ -103,23 +132,22 @@ final class NativeOutput {
         }
         let result = CGCompleteDisplayConfiguration(config, .forSession)
         try require(result == .success, "提交显示输出事务失败：\(result.rawValue)")
-        if enabled {
-            let until = Date().addingTimeInterval(3)
-            while !(try outputPanels()).contains(where: { sameUUID($0.uuid, baseline.target.uuid) && $0.active }) {
-                try require(Date() < until, "已请求启用，但原显示器 UUID 尚未恢复；请重插视频线")
-                Thread.sleep(forTimeInterval: 0.1)
-            }
-            var layout: CGDisplayConfigRef?
-            try require(CGBeginDisplayConfiguration(&layout) == .success, "输出已恢复，但无法恢复屏幕位置")
-            let live = try outputPanels()
-            for panel in baseline.panels where panel.active {
-                if let current = live.first(where: { sameUUID($0.uuid, panel.uuid) && $0.active }) {
-                    let moved = CGConfigureDisplayOrigin(layout, current.id, panel.x, panel.y)
-                    if moved != .success { CGCancelDisplayConfiguration(layout); throw OutputError("输出已恢复，但恢复屏幕位置失败") }
-                }
-            }
-            try require(CGCompleteDisplayConfiguration(layout, .forSession) == .success, "输出已恢复，但提交屏幕位置失败")
+    }
+    func restoreLayout(_ baseline: OutputBaseline) throws {
+        let live = try outputPanels()
+        let changes = baseline.panels.filter { panel in
+            panel.active && live.contains { sameUUID($0.uuid, panel.uuid) && $0.active && ($0.x != panel.x || $0.y != panel.y) }
         }
+        if changes.isEmpty { return }
+        var layout: CGDisplayConfigRef?
+        try require(CGBeginDisplayConfiguration(&layout) == .success, "输出已恢复，但无法恢复屏幕位置")
+        for panel in changes {
+            if let current = live.first(where: { sameUUID($0.uuid, panel.uuid) && $0.active }) {
+                let moved = CGConfigureDisplayOrigin(layout, current.id, panel.x, panel.y)
+                if moved != .success { CGCancelDisplayConfiguration(layout); throw OutputError("输出已恢复，但恢复屏幕位置失败") }
+            }
+        }
+        try require(CGCompleteDisplayConfiguration(layout, .forSession) == .success, "输出已恢复，但提交屏幕位置失败")
     }
 }
 func selfTest() throws {
@@ -141,12 +169,56 @@ func selfTest() throws {
         do { try operation() } catch { rejected = true }
         try require(rejected, "Unsafe output selection was accepted")
     }
+    var live = [internalPanel, external]
+    var enables = 0
+    var waits = 0
+    let pause = { waits += 1 }
+    try restoreOutput(external, panels: { live }, enable: { enables += 1 }, pause: pause)
+    try require(enables == 0, "Already active output must skip native enable")
+    live = [internalPanel]
+    try restoreOutput(external, panels: { live }, enable: {
+        enables += 1
+        live = [internalPanel, moved]
+    }, pause: pause)
+    try require(enables == 1 && waits == 0, "Native recovery must confirm the current UUID")
+    live = [internalPanel]
+    try restoreOutput(external, panels: { live }, enable: {
+        live = [internalPanel, moved]
+        throw OutputError("提交显示输出事务失败：1001")
+    }, pause: pause)
+    try require(waits == 0, "A target recovered after a partial error must succeed")
+    live = [internalPanel]
+    try restoreOutput(external, panels: { live }, enable: {
+        throw OutputError("提交显示输出事务失败：1001")
+    }, pause: {
+        waits += 1
+        if waits == 3 { live = [internalPanel, moved] }
+    })
+    try require(waits == 3, "Delayed UUID recovery after a transaction error must succeed")
+    live = [internalPanel]
+    enables = 0
+    waits = 0
+    try restoreOutput(external, panels: { live }, enable: {
+        enables += 1
+        if enables == 2 { live = [internalPanel, moved] }
+        else { throw OutputError("提交显示输出事务失败：1001") }
+    }, pause: pause)
+    try require(enables == 2 && waits == 15, "Transient failure must retry after bounded settling")
+    live = [internalPanel, unrelated]
+    waits = 0
+    var recoveryFailed = false
+    do {
+        try restoreOutput(external, panels: { live }, enable: { throw OutputError("提交显示输出事务失败：1001") }, pause: pause)
+    } catch {
+        recoveryFailed = String(describing: error).contains("1001")
+    }
+    try require(recoveryFailed && waits == 30, "Missing target UUID must remain a bounded recovery failure")
     let decoded = try JSONDecoder().decode(OutputBaseline.self, from: JSONEncoder().encode(saved))
     try require(decoded.target == external && decoded.panels == saved.panels, "Recovery data roundtrip failed")
 }
 func main() throws {
     let args = Array(CommandLine.arguments.dropFirst())
-    if args == ["self-test"] { try selfTest(); print("mac-output selection and offline-ID recovery tests passed; no native calls"); return }
+    if args == ["self-test"] { try selfTest(); print("mac-output selection, UUID recovery and retry tests passed; no native calls"); return }
     guard let action = args.first else { throw OutputError("缺少显示输出操作") }
     var value: Any
     if action == "list" {
