@@ -6,6 +6,7 @@ import type { Config, Snapshot } from '../shared/types'
 const props = defineProps<{ locked: boolean; isHost: boolean; state: Snapshot }>()
 const side = defineModel<Config['layoutSide']>('side', { required: true })
 const video = defineModel<Config['crossScreenVideo']>('video', { required: true })
+const speed = defineModel<number>('speed', { required: true })
 const retained = defineModel<string>('retained', { required: true })
 const displayedSide = computed({
   get: () => (props.isHost ? side.value : (props.state.sessionLayout?.hostSide ?? 'off')),
@@ -48,6 +49,22 @@ const retainedAvailable = computed(
         state.connected ? '下方显示本次连接的布局。' : '连接后自动显示提供端的布局。'
       }}本机独立屏幕可在停止共享后设置。
     </div>
+    <label v-if="!isHost" class="field">
+      <span>本机接收鼠标速度 · {{ speed.toFixed(2) }}×</span>
+      <input
+        v-model.number="speed"
+        type="range"
+        min="0.5"
+        max="2"
+        step="0.05"
+        :disabled="locked"
+        aria-label="本机接收鼠标速度"
+      />
+    </label>
+    <p v-if="!isHost" class="hint">
+      0.5× 更慢，1× 为原始速度，2× 更快。仅调整映射到本机的鼠标，不影响提供端本机鼠标或滚轮。
+      两端需使用支持此设置的版本；停止共享后调整，保存并重新开始共享后生效。
+    </p>
     <ScreenLayoutEditor
       v-model="displayedSide"
       :disabled="locked || !isHost"

@@ -352,6 +352,27 @@ pub async fn assert_no_running_engine(dir: &Path) -> Result<()> {
     }
     Ok(())
 }
+pub(crate) fn session_mouse_config(local: &Config, peer: &Identity) -> Config {
+    let mut config = local.clone();
+    if config.role == "host" {
+        // Never persist the peer's preference over this machine's own setting.
+        config.receiver_mouse_speed = peer.receiver_mouse_speed;
+    }
+    config
+}
+
+// Deskflow 1.27 applies this only to secondary-computer motion, before
+// accumulating coordinates and testing screen boundaries. Override inherited
+// values even at 1x; client processes must never inherit this server setting.
+fn configure_mouse_speed(command: &mut Command, config: &Config) {
+    const KEY: &str = "DESKFLOW_MOUSE_ADJUSTMENT";
+    if config.role == "host" {
+        command.env(KEY, config.receiver_mouse_speed.to_string());
+    } else {
+        command.env_remove(KEY);
+    }
+}
+
 pub struct Engine {
     pid: u32,
     guardian_pid: Option<u32>,
@@ -399,6 +420,7 @@ impl Engine {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        configure_mouse_speed(&mut command, c);
         if cfg!(unix) {
             command.env("TMPDIR", format!("{}/", temp.display()));
         }
@@ -774,6 +796,7 @@ mod tests {
             second_display_inputs: None,
             shortcut: "control+alt+F10".into(),
             modifier_mapping: ModifierMapping::Original,
+            receiver_mouse_speed: 1.0,
             clipboard: true,
             clipboard_megabytes: 4,
             deskflow_port: 24801,
@@ -781,6 +804,61 @@ mod tests {
             layout_side: "left".into(),
             cross_screen_video: "manual".into(),
             retained_display: false,
+        }
+    }
+
+    #[test]
+    fn mouse_speed_is_receiver_owned_and_scoped_to_the_server_process() {
+        for role in ["host", "client"] {
+            for speed in [0.5, 1.0, 1.35, 2.0] {
+                let local = Config {
+                    role: role.into(),
+                    receiver_mouse_speed: 1.8,
+                    ..Config::default()
+                };
+                let mut remote = peer();
+                remote.receiver_mouse_speed = speed;
+                let effective = session_mouse_config(&local, &remote);
+                assert_eq!(local.receiver_mouse_speed, 1.8);
+                assert_eq!(
+                    effective.receiver_mouse_speed,
+                    if role == "host" { speed } else { 1.8 }
+                );
+                let mut command = Command::new("deskflow-core");
+                command.env("DESKFLOW_MOUSE_ADJUSTMENT", "9");
+                configure_mouse_speed(&mut command, &effective);
+                let value = command
+                    .as_std()
+                    .get_envs()
+                    .find(|(key, _)| *key == "DESKFLOW_MOUSE_ADJUSTMENT")
+                    .unwrap()
+                    .1;
+                if role == "host" {
+                    assert_eq!(value.unwrap().to_str().unwrap(), speed.to_string());
+                } else {
+                    assert_eq!(value, None);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn peer_mouse_speed_defaults_and_validates_before_launch() {
+        let mut remote = peer();
+        let mut legacy = serde_json::to_value(&remote).unwrap();
+        legacy.as_object_mut().unwrap().remove("receiverMouseSpeed");
+        assert_eq!(
+            serde_json::from_value::<Identity>(legacy)
+                .unwrap()
+                .receiver_mouse_speed,
+            1.0
+        );
+        for speed in [0.5, 2.0, 0.49, 2.01, f64::INFINITY, f64::NAN] {
+            remote.receiver_mouse_speed = speed;
+            assert_eq!(
+                remote.validate().is_ok(),
+                speed.is_finite() && (0.5..=2.0).contains(&speed)
+            );
         }
     }
 
