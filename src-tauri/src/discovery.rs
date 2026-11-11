@@ -9,6 +9,7 @@ use std::{
 };
 use tokio::net::{lookup_host, TcpStream};
 
+const STANDBY_SERVICE: &str = "_ddc-lifecycle._tcp.local.";
 pub const SERVICE: &str = "_deskflow-ddc._tcp.local.";
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -20,19 +21,27 @@ pub struct Device {
     pub port: u16,
 }
 pub struct Discovery {
+    service: &'static str,
     daemon: ServiceDaemon,
     registered: Option<String>,
 }
 impl Discovery {
     pub fn new() -> Result<Self> {
+        Self::with_service(SERVICE)
+    }
+    pub fn new_standby() -> Result<Self> {
+        Self::with_service(STANDBY_SERVICE)
+    }
+    fn with_service(service: &'static str) -> Result<Self> {
         Ok(Self {
+            service,
             daemon: ServiceDaemon::new()?,
             registered: None,
         })
     }
     pub fn advertise(&mut self, id: &str, config: &Config) -> Result<()> {
         self.stop_advertising();
-        if config.role != "host" {
+        if self.service == SERVICE && config.role != "host" {
             return Ok(());
         }
         // UUID-derived hostname avoids collisions after renaming a computer.
@@ -45,7 +54,7 @@ impl Discovery {
         let addresses = local_addresses();
         ensure!(!addresses.is_empty(), "没有可发布的局域网地址");
         let info = ServiceInfo::new(
-            SERVICE,
+            self.service,
             &format!("ddc-{id}"),
             &host,
             addresses.as_slice(),
@@ -63,7 +72,7 @@ impl Discovery {
         }
     }
     pub async fn browse(&self, wait: Duration) -> Result<Vec<Device>> {
-        let receiver = self.daemon.browse(SERVICE)?;
+        let receiver = self.daemon.browse(self.service)?;
         let deadline = tokio::time::Instant::now() + wait;
         let mut found = BTreeMap::new();
         while let Ok(Ok(event)) = tokio::time::timeout_at(deadline, receiver.recv_async()).await {
@@ -103,7 +112,7 @@ impl Discovery {
                 _ => {}
             }
         }
-        let _ = self.daemon.stop_browse(SERVICE);
+        let _ = self.daemon.stop_browse(self.service);
         Ok(found.into_values().collect())
     }
 }

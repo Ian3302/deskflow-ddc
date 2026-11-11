@@ -1,4 +1,6 @@
 mod control;
+mod standby;
+pub(crate) use standby::port as standby_port;
 mod display_only;
 mod display_recovery;
 mod display_source;
@@ -390,6 +392,7 @@ impl Runtime {
                 }
             }
         });
+        runtime.start_standby();
         runtime.start_pointer_poll();
         Ok(runtime)
     }
@@ -885,6 +888,11 @@ impl Runtime {
         Ok(())
     }
     pub async fn stop(&self) -> Result<()> {
+        let result = self.stop_local().await;
+        self.notify_peer_stop().await;
+        result
+    }
+    async fn stop_local(&self) -> Result<()> {
         self.interrupt_switch_wait();
         let _lifecycle = self.start_stop.lock().await;
         self.trace("sharing.stopRequested", json!({})).await;

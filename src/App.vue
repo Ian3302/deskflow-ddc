@@ -138,6 +138,18 @@ const on = computed(() =>
               emergencyBusy ? '正在恢复…' : displayOnly ? '停用切换' : '停止共享并恢复输出'
             }}
           </button>
+          <button
+            v-else
+            class="button primary compact"
+            :disabled="busy || loading"
+            @click="
+              displayOnly || state.hasSavedPairing ? act({ type: 'start' }) : (page = 'pairing')
+            "
+          >
+            <AppIcon name="power" :size="16" />{{
+              busy ? '正在开启…' : displayOnly ? '启用显示器切换' : '开启共享'
+            }}
+          </button>
           <RecoveryHelp
             :display-only="displayOnly"
             :running="state.running"

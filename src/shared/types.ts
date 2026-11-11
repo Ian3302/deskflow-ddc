@@ -7,6 +7,7 @@ export interface StartupPreferences {
   autoShare: boolean
 }
 export interface Config {
+  allowRemoteStart: boolean
   displayMethod: 'ddc' | 'signal'
   outputId: string
   mode: OperationMode
