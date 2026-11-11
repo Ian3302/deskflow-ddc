@@ -27,6 +27,18 @@ describe('native error guidance', () => {
     expect(guidance.summary).toBe('恢复显示输出失败: DDC bus unavailable')
   })
 
+  it('explains English engine connection failures and links to engine settings', () => {
+    for (const reason of ['Connection refused', 'server is not responding']) {
+      const guidance = errorGuidance({
+        action: 'runtime',
+        message: `[2026-11-11T13:59:34.042] WARNING: failed to connect to server: ${reason}`,
+      })
+      expect(guidance.summary).toBe('键鼠引擎无法连接提供端。')
+      expect(guidance.destination).toBe('sharing')
+      expect(guidance.advice).toContain('键鼠共享端口')
+    }
+  })
+
   it('preserves ordinary summaries and bounds native diagnostics', () => {
     expect(errorGuidance({ action: 'save', message: '请选择外接屏\n详细信息' }).summary).toBe(
       '请选择外接屏',

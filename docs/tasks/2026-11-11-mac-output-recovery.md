@@ -1,8 +1,8 @@
-# macOS 显示输出恢复与设置保存修复
+# 显示输出恢复、设置保存与引擎重试提示修复
 
 ## 目标与范围
 
-用户要求修复截图中的保存设置失败。本机日志记录 mac-output restore 提交显示事务返回 1001，错误摘要同时被基线 JSON 占满。修复配对等设置保存对输出恢复的依赖，完善恢复状态确认与重试，并展示真实失败原因。
+用户要求修复截图中的保存设置失败。本机日志记录 mac-output restore 提交显示事务返回 1001，错误摘要同时被基线 JSON 占满。修复配对等设置保存对输出恢复的依赖，完善恢复状态确认与重试，并展示真实失败原因。用户追加截图反馈 Connection refused 弹窗，任务范围增加引擎连接重试警告与重复操作按钮的修复。
 
 ## 分支与基线
 
@@ -28,6 +28,8 @@
 - 已启用目标跳过重复启用，位置一致时跳过位置事务。编号冲突校验保留。
 - 恢复轮询总等待上限约三秒，配合现有原生调用七秒超时。
 - 错误摘要优先提取 stderr，缺失时使用 stdout，原始错误继续保留在详情中。
+- 第二张截图对应日志显示 13:59:34.042 连接被拒绝，13:59:35.106 已重新连接。引擎自带的连接重试 WARNING 保存为 info 活动记录，实际 ERROR 保持错误状态，持续失败继续走现有 25 秒启动超时。
+- 英文连接失败增加中文解释及共享端口设置指引，错误弹窗的活动记录入口去重。
 - 曾验证 CGRestorePermanentDisplayConfiguration 作为恢复兜底，在本机强制注入启用失败后无法重新启用目标，已从最终实现移除。
 
 ## 验证
@@ -37,14 +39,14 @@
 已通过以下检查。
 
 - `pnpm typecheck`
-- `pnpm test`，17 个测试文件，79 项测试通过，含新增 4 项错误摘要回归测试
+- `pnpm test`，17 个测试文件，追加截图修复后 81 项测试全部通过，包含英文连接错误引导和活动记录按钮去重
 - `pnpm build:web`
 - `pnpm test:native`，含 Swift 恢复状态机故障注入测试
 - `prettier --check src/shared/error-guidance.ts tests/error-guidance.test.ts`
 - `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check`
 - `git diff --check`
 
-Rust 默认并行测试首次运行 194 项通过，1 项既有测试 accepted_switch_retries_transient_readback_without_undoing_input_or_reissuing_writes 因等待超时失败。新增配对保存回归测试通过。随后执行 `cargo test --locked --manifest-path src-tauri/Cargo.toml --no-default-features --lib -- --test-threads=1`，195 项全部通过，包含该超时项。
+Rust 默认并行测试首次运行 194 项通过，1 项既有测试 accepted_switch_retries_transient_readback_without_undoing_input_or_reissuing_writes 因等待超时失败。新增配对保存回归测试通过。随后执行 `cargo test --locked --manifest-path src-tauri/Cargo.toml --no-default-features --lib -- --test-threads=1`，195 项全部通过，包含该超时项。追加截图修复后再次执行串行测试，196 项全部通过。
 
 本机硬件验证使用任务 worktree 编译的 mac-output。原版 helper 本次恢复成功，历史 1001 未在这次实测重现。最终实现重新捕获基线、停用、恢复均退出 0。恢复后两块外接屏均 active，位置为 (0, 0) 与 (-1920, 0)，符合基线。
 
@@ -59,4 +61,5 @@ PR https://github.com/Ian3302/deskflow-ddc/pull/3 已创建，待合并。用户
 ## 遗留事项
 
 - 跟进最终提交的 CI。
+- 用户询问偶发字母变符号现象，已检查内部转移快捷键及 Ctrl/Command 映射。初步怀疑 Option/Alt 状态残留，正在确认异常平台与字符，尚未据此修改键盘注入逻辑。
 - 双机键鼠转移和显示器实际画面仍需实测。

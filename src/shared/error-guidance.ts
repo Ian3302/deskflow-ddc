@@ -38,6 +38,14 @@ export function errorGuidance(failure: ActionFailure) {
       destination: 'display',
       label: '检查显示器配置',
     }
+  if (/failed to connect to server|connection refused|server is not responding/i.test(message))
+    return {
+      summary: '键鼠引擎无法连接提供端。',
+      advice:
+        '确认提供端正在共享，并检查两端的键鼠共享端口和防火墙。连接重试期间可在工作台查看引擎状态。',
+      destination: 'sharing',
+      label: '检查共享设置',
+    }
   if (/键鼠|Deskflow|引擎/i.test(message))
     return {
       summary,
