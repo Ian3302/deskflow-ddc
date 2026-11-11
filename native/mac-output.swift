@@ -89,7 +89,7 @@ func restoreOutput(_ target: OutputPanel, panels: () throws -> [OutputPanel],
     }
     if try isActive() { return }
     // This undoes session-only display changes using the user's saved macOS
-    // configuration. A void return is not evidence that the target recovered.
+    // configuration. Confirm recovery by UUID because this API has no return value.
     restorePermanent()
     for _ in 0..<30 {
         if try isActive() { return }
