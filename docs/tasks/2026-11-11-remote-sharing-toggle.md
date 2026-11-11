@@ -48,7 +48,14 @@
 
 ## PR 与交付
 
-PR：https://github.com/Ian3302/deskflow-ddc/pull/6 ，状态 OPEN，未合并。创建后 GitHub 返回的 statusCheckRollup 为空，任务分支未出现 Actions 运行；继续检查工作流状态。
+PR：https://github.com/Ian3302/deskflow-ddc/pull/6 ，状态 OPEN，未合并。无合并冲突，等待用户明确授权合并。
+
+创建后 GitHub 未报告 PR 自动检查，已手动在任务分支触发仓库既有工作流，并跟进至全部完成：
+
+- [Tauri Build](https://github.com/Ian3302/deskflow-ddc/actions/runs/42981633739)：SUCCESS，macOS ARM64 和 Windows x64 的前端、原生、完整 Rust、引擎集成测试与安装包构建均通过。
+- [Ubuntu experimental build](https://github.com/Ian3302/deskflow-ddc/actions/runs/42981638448)：SUCCESS，x64 与 ARM64 的测试及安装包构建均通过。
+- CI 验证提交：`dc1c543a9b2a1951c2c1715e871b3cc29feb59c5`；之后仅补充本文档的结果记录，不修改代码。
+- 安装包已上传对应运行的 artifacts（仓库配置保留 7 天）。
 
 ## 遗留事项
 
