@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { mkdirSync, readFileSync } from 'node:fs'
 // Windows PowerShell 5.1 reads BOM-less scripts using the system code page.
 const windowsBridge = readFileSync('native/windows/monitor.ps1')
@@ -34,6 +34,7 @@ if (process.platform === 'darwin') {
     ],
     { stdio: 'inherit' },
   )
+  execFileSync('.native-cache/test-mac-hotkey', ['self-test'], { stdio: 'inherit' })
   // This action only inspects state; it never posts keyboard or mouse input.
   const inputStatus = JSON.parse(
     execFileSync('.native-cache/test-mac-hotkey', ['diagnose'], { encoding: 'utf8' }),
@@ -41,6 +42,35 @@ if (process.platform === 'darwin') {
   for (const field of ['accessibility', 'postEventAccess', 'secureEventInput']) {
     if (typeof inputStatus[field] !== 'boolean')
       throw new Error(`Missing native input diagnostic field: ${field}`)
+  }
+  for (const source of ['hid', 'session']) {
+    for (const modifier of ['control', 'option', 'shift', 'command']) {
+      for (const side of ['left', 'right']) {
+        if (typeof inputStatus.modifiers?.[source]?.[modifier]?.[side] !== 'boolean')
+          throw new Error(`Missing native modifier state: ${source}.${modifier}.${side}`)
+      }
+      if (typeof inputStatus.modifiers?.[source]?.flags?.[modifier] !== 'boolean')
+        throw new Error(`Missing native modifier flag: ${source}.${modifier}`)
+    }
+  }
+  const snapshots = execFileSync('.native-cache/test-mac-hotkey', ['watch-modifiers', '1'], {
+    encoding: 'utf8',
+    timeout: 5000,
+  })
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line))
+  if (
+    !snapshots.length ||
+    snapshots.some((sample) => !sample.modifiers || !Number.isFinite(sample.time))
+  )
+    throw new Error('Modifier watcher must return timestamped snapshots')
+  for (const invalid of ['0', '61', 'invalid']) {
+    const result = spawnSync('.native-cache/test-mac-hotkey', ['watch-modifiers', invalid], {
+      timeout: 5000,
+    })
+    if (result.status !== 2)
+      throw new Error(`Modifier watcher accepted invalid duration: ${invalid}`)
   }
   execFileSync(
     'swiftc',
