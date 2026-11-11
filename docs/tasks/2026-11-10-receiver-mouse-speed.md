@@ -43,3 +43,27 @@ Deskflow 固定版本 1.27.0 的 `Server::onMouseMoveSecondary` 已实现 `DESKF
 ## 遗留事项
 
 两端需更新到包含本功能的构建。PR 已创建，CI 全部通过；尚未授权合并。
+
+## 2026-11-11 本地构建
+
+用户要求直接在本机构建鼠标速度功能。使用当前任务分支 `fea465d`，在既有独立 worktree 中生成 macOS arm64 应用。复用本机已缓存、由仓库校验哈希的 Deskflow 运行时依赖，编译本项目 Web、原生桥及 Rust 桌面程序。
+
+- [x] 准备本地构建资源。
+- [x] 执行本地测试和 macOS 应用打包。
+- [x] 核验产物包含鼠标速度入口、应用架构与签名，记录交付路径。
+
+当前主机为 Apple Silicon macOS。Windows 安装包需要 Windows 构建环境，两端使用鼠标速度功能时均需包含该功能。
+
+### 本地构建结果
+
+- `node scripts/prepare-engine.mjs` 通过。本项目原生桥在本机编译，Deskflow 引擎依赖复用已校验的本机缓存。
+- `pnpm typecheck` 与 `pnpm test` 通过，78 项前端测试通过。
+- `pnpm pack:mac` 通过，Web、Rust 桌面程序和 macOS .app 打包均成功。
+- `resources/bin/mac-output self-test` 通过。
+- `cargo test --locked --release --manifest-path src-tauri/Cargo.toml --test bundled_runtime -- --ignored` 通过，内置引擎解包、签名及版本启动检查通过。
+- `codesign --verify --deep --strict --verbose=2` 通过，应用为本地 ad-hoc 签名。
+- `file` 确认桌面程序为 Mach-O arm64。
+- 构建后的 Web 资源包含“本机接收鼠标速度”，内置引擎包含 `DESKFLOW_MOUSE_ADJUSTMENT`。应用包中的引擎归档与构建输入 SHA-256 一致。
+- `git diff --check` 通过。此次操作仅更新任务文档，应用安装与双机实际手感待用户验证。
+
+本地产物 `/Users/yanchengbin/Desktop/DDC-receiver-mouse-speed/src-tauri/target/release/bundle/macos/Deskflow DDC.app`，约 47.39 MiB。构建源码为鼠标速度分支 `fea465d`，文档后续提交单独记录交付结果。PR #2 继续待合并。
