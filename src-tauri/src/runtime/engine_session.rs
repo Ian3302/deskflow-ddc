@@ -260,7 +260,17 @@ impl Runtime {
         }
         i.diagnostic_line = Some((line.into(), 1, now));
         drop(i);
-        self.log("error", line).await;
+        // Deskflow retries connection warnings itself. Keep their evidence in
+        // activity while the existing startup timeout handles persistent failure.
+        let level = if line
+            .to_ascii_lowercase()
+            .contains("warning: failed to connect to server:")
+        {
+            "info"
+        } else {
+            "error"
+        };
+        self.log(level, line).await;
     }
 }
 
@@ -268,6 +278,32 @@ impl Runtime {
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+
+    #[tokio::test]
+    async fn connection_retry_warnings_keep_diagnostics_without_raising_a_runtime_failure() {
+        let directory = tempfile::tempdir().unwrap();
+        let runtime = super::super::pointer_bridge::tests::fixture(directory.path(), "client");
+        for reason in ["Connection refused", "server is not responding"] {
+            let line =
+                format!("[2026-11-11T13:59:34.042] WARNING: failed to connect to server: {reason}");
+            runtime.diagnostic_line(&line).await;
+            let state = runtime.snapshot().await;
+            assert!(state.last_error.is_none());
+            assert_eq!(state.logs[0].level, "info");
+            assert_eq!(state.logs[0].message, line);
+        }
+        runtime.log("error", "显示输出恢复失败").await;
+        runtime
+            .diagnostic_line("WARNING: failed to connect to server: Connection refused")
+            .await;
+        assert_eq!(
+            runtime.snapshot().await.last_error.as_deref(),
+            Some("显示输出恢复失败")
+        );
+        let fatal = "ERROR: failed to connect to server: certificate rejected";
+        runtime.diagnostic_line(fatal).await;
+        assert_eq!(runtime.snapshot().await.last_error.as_deref(), Some(fatal));
+    }
 
     #[tokio::test]
     async fn provider_native_shortcut_round_trips_without_receiver_callbacks_and_rejects_stale_events(

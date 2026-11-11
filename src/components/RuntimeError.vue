@@ -72,7 +72,11 @@ const destination = computed(() =>
               @click="$emit('export')"
             >
               导出诊断日志</button
-            ><button class="text-button" @click="$emit('navigate', destination)">
+            ><button
+              v-if="destination !== 'activity'"
+              class="text-button"
+              @click="$emit('navigate', destination)"
+            >
               {{
                 displayOnly && guidance.destination === 'pairing'
                   ? '检查显示器配置'

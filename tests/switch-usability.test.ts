@@ -108,6 +108,15 @@ describe('switch feedback and recovery', () => {
     // The queued action can be busy, while emergency recovery remains enabled.
     expect(result).not.toMatch(/<button[^>]*disabled[^>]*>\s*停止共享并恢复输出/)
   })
+  it('shows one activity link when the error guidance also points to activity', async () => {
+    const result = await html(RuntimeError, {
+      failure: { action: 'runtime', message: '未识别的问题' },
+      busy: false,
+      running: true,
+      preview: false,
+    })
+    expect(result.match(/查看活动记录/g)).toHaveLength(1)
+  })
 })
 
 describe('one-save output selection', () => {
