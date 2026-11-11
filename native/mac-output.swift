@@ -68,34 +68,25 @@ func resolveOutput(_ saved: OutputPanel, panels: [OutputPanel], enabled: Bool,
     try require(enabled, "外接输出已不可用，未再次停用")
     return saved.id
 }
-// Keep recovery bounded by the platform worker's seven-second timeout. The
-// saved configuration is a fallback for outputs that cannot be re-enabled by ID.
+// Display transactions can report an error while the asynchronous change is
+// still settling. Confirm the target UUID and retry within the worker timeout.
 func restoreOutput(_ target: OutputPanel, panels: () throws -> [OutputPanel],
-                   enable: () throws -> Void, restorePermanent: () -> Void,
-                   pause: () -> Void) throws {
+                   enable: () throws -> Void, pause: () -> Void) throws {
     func isActive() throws -> Bool {
         try panels().contains { sameUUID($0.uuid, target.uuid) && $0.active }
     }
     if try isActive() { return }
     var nativeFailure = "已请求启用，但原显示器 UUID 尚未恢复"
-    do {
-        try enable()
-        for _ in 0..<10 {
+    for _ in 0..<2 {
+        do { try enable() }
+        catch { nativeFailure = String(describing: error) }
+        for _ in 0..<15 {
             if try isActive() { return }
             pause()
         }
-    } catch {
-        nativeFailure = String(describing: error)
-    }
-    if try isActive() { return }
-    // This undoes session-only display changes using the user's saved macOS
-    // configuration. Confirm recovery by UUID because this API has no return value.
-    restorePermanent()
-    for _ in 0..<30 {
         if try isActive() { return }
-        pause()
     }
-    try require(try isActive(), "\(nativeFailure)；已尝试恢复系统显示配置，目标输出仍未启用，请检查视频连接并重试恢复")
+    throw OutputError("\(nativeFailure)；目标输出仍未启用，请检查视频连接并重试恢复")
 }
 final class NativeOutput {
     typealias Configure = @convention(c) (OpaquePointer?, UInt32, Bool) -> Int32
@@ -124,7 +115,6 @@ final class NativeOutput {
         if enabled {
             try restoreOutput(baseline.target, panels: outputPanels,
                               enable: { try self.setEnabled(id, enabled: true) },
-                              restorePermanent: CGRestorePermanentDisplayConfiguration,
                               pause: { Thread.sleep(forTimeInterval: 0.1) })
             try restoreLayout(baseline)
         } else {
@@ -181,42 +171,54 @@ func selfTest() throws {
     }
     var live = [internalPanel, external]
     var enables = 0
-    var fallbacks = 0
     var waits = 0
-    let enable = { enables += 1; live = [internalPanel, moved] }
-    let fallback = { fallbacks += 1; live = [internalPanel, moved] }
     let pause = { waits += 1 }
-    try restoreOutput(external, panels: { live }, enable: enable, restorePermanent: fallback, pause: pause)
-    try require(enables == 0 && fallbacks == 0, "Already active output must not be re-enabled")
+    try restoreOutput(external, panels: { live }, enable: { enables += 1 }, pause: pause)
+    try require(enables == 0, "Already active output must skip native enable")
     live = [internalPanel]
-    try restoreOutput(external, panels: { live }, enable: enable, restorePermanent: fallback, pause: pause)
-    try require(enables == 1 && fallbacks == 0, "Native recovery must take priority")
+    try restoreOutput(external, panels: { live }, enable: {
+        enables += 1
+        live = [internalPanel, moved]
+    }, pause: pause)
+    try require(enables == 1 && waits == 0, "Native recovery must confirm the current UUID")
     live = [internalPanel]
     try restoreOutput(external, panels: { live }, enable: {
         live = [internalPanel, moved]
         throw OutputError("提交显示输出事务失败：1001")
-    }, restorePermanent: fallback, pause: pause)
-    try require(fallbacks == 0, "A target already recovered after a partial error needs no fallback")
+    }, pause: pause)
+    try require(waits == 0, "A target recovered after a partial error must succeed")
     live = [internalPanel]
-    try restoreOutput(external, panels: { live }, enable: { throw OutputError("提交显示输出事务失败：1001") }, restorePermanent: fallback, pause: pause)
-    try require(fallbacks == 1, "Failed native transaction must restore saved system configuration")
+    try restoreOutput(external, panels: { live }, enable: {
+        throw OutputError("提交显示输出事务失败：1001")
+    }, pause: {
+        waits += 1
+        if waits == 3 { live = [internalPanel, moved] }
+    })
+    try require(waits == 3, "Delayed UUID recovery after a transaction error must succeed")
     live = [internalPanel]
-    try restoreOutput(external, panels: { live }, enable: {}, restorePermanent: fallback, pause: pause)
-    try require(fallbacks == 2 && waits == 10, "Unconfirmed native recovery must use bounded fallback")
+    enables = 0
+    waits = 0
+    try restoreOutput(external, panels: { live }, enable: {
+        enables += 1
+        if enables == 2 { live = [internalPanel, moved] }
+        else { throw OutputError("提交显示输出事务失败：1001") }
+    }, pause: pause)
+    try require(enables == 2 && waits == 15, "Transient failure must retry after bounded settling")
     live = [internalPanel, unrelated]
+    waits = 0
     var recoveryFailed = false
     do {
-        try restoreOutput(external, panels: { live }, enable: { throw OutputError("提交显示输出事务失败：1001") }, restorePermanent: {}, pause: pause)
+        try restoreOutput(external, panels: { live }, enable: { throw OutputError("提交显示输出事务失败：1001") }, pause: pause)
     } catch {
         recoveryFailed = String(describing: error).contains("1001")
     }
-    try require(recoveryFailed && waits == 40, "Missing target UUID must remain a recovery failure after bounded fallback")
+    try require(recoveryFailed && waits == 30, "Missing target UUID must remain a bounded recovery failure")
     let decoded = try JSONDecoder().decode(OutputBaseline.self, from: JSONEncoder().encode(saved))
     try require(decoded.target == external && decoded.panels == saved.panels, "Recovery data roundtrip failed")
 }
 func main() throws {
     let args = Array(CommandLine.arguments.dropFirst())
-    if args == ["self-test"] { try selfTest(); print("mac-output selection, UUID recovery and fallback tests passed; no native calls"); return }
+    if args == ["self-test"] { try selfTest(); print("mac-output selection, UUID recovery and retry tests passed; no native calls"); return }
     guard let action = args.first else { throw OutputError("缺少显示输出操作") }
     var value: Any
     if action == "list" {
