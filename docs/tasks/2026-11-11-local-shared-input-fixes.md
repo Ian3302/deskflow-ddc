@@ -30,7 +30,9 @@
 
 ## PR 与遗留事项
 
-PR #4 https://github.com/Ian3302/deskflow-ddc/pull/4 已创建，用户未授权合并。安装需保留旧应用备份。
+PR #4 https://github.com/Ian3302/deskflow-ddc/pull/4 。用户于 2026-11-11 明确授权合并。合并前确认无冲突、无待处理评审、无必需检查或分支保护规则，按 GitHub PR 流程合并。最终远端状态以 PR 页面为准。安装需保留旧应用备份。
+
+本整合 PR 未自动触发 Actions，合并前采用上述本地验证结果，PR #2 与 #3 的各自双平台 CI 已通过。Windows 整合版实际手感尚待更新提供端后验证。
 
 ## 实时调速查询
 
