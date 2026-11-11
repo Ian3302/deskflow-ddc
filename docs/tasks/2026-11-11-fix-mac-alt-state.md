@@ -45,7 +45,9 @@
 
 ## PR 与状态
 
-草稿 PR：https://github.com/Ian3302/deskflow-ddc/pull/5 。代码提交 `c50cfa3`。未合并，用户尚未授权合并；由于尚未证明解决用户的物理 Alt 故障，保持 draft。
+PR：https://github.com/Ian3302/deskflow-ddc/pull/5 。代码提交 `c50cfa3`。用户于 2026-11-11 明确要求直接合并，已获得合并授权。合并前确认 PR 无冲突、无待处理评审或检查，main 未启用分支保护。将通过 GitHub PR 合并，实际合并状态和提交以 PR 页面为准。
+
+合并授权不改变验证结论：本地原生回归和编译已通过，CI 未运行，物理 Alt 故障仍待双机实测。本次合并不包含替换已安装应用。
 
 ## 遗留事项
 
