@@ -449,13 +449,14 @@ impl Engine {
         #[cfg(target_os = "macos")]
         let mut guardian = {
             let result = async {
-                crate::engine_guard::Guardian::start(&mut child, &std::env::current_exe()?).await
+                crate::engine_guard::Guardian::start(&mut child, &std::env::current_exe()?, temp).await
             }
             .await;
             match result {
                 Ok(guardian) => guardian,
                 Err(error) => {
                     child.kill().await.context("退出保护失败且无法结束引擎")?;
+                    crate::engine_guard::cleanup_engine_ipc(temp, pid);
                     return Err(error);
                 }
             }
@@ -546,7 +547,14 @@ impl Engine {
             };
             ipc_task.abort();
             #[cfg(target_os = "macos")]
-            guardian.finish().await;
+            {
+                guardian.finish().await;
+                // If the guardian failed, the parent still owns the namespace
+                // and can recover its IPC before removing the Qt key files.
+                if matches!(child.try_wait(), Ok(Some(_))) {
+                    crate::engine_guard::cleanup_engine_ipc(&session_namespace.0, pid);
+                }
+            }
             #[cfg(unix)]
             drop(session_namespace);
             // Deliver the exit event even under backpressure, independently of

@@ -2,11 +2,16 @@
 
 use deskflow_ddc_tauri::engine_guard::Guardian;
 use std::{
+    ffi::CString,
+    os::unix::{ffi::OsStrExt, fs::PermissionsExt},
     path::Path,
     process::Stdio,
     time::{Duration, Instant},
 };
 use tokio::process::Command;
+
+const QT_MEMORY_KEY: &str =
+    "qipc_sharedmemory_deskflowcorefbfa2630dd772f55959dda40b83431af95318db4";
 
 fn alive(pid: u32) -> bool {
     let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
@@ -28,19 +33,40 @@ async fn guardian_owner_fixture() {
     let Some(file) = std::env::var_os("DDC_GUARD_FIXTURE_FILE") else {
         return;
     };
+    let directory = Path::new(&file).parent().unwrap();
     let mut engine = Command::new("python3")
         .args([
             "-c",
-            "import signal,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); time.sleep(60)",
+            r#"
+import ctypes, os, signal, sys, time
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+libc = ctypes.CDLL(None)
+libc.shmat.restype = ctypes.c_void_p
+open(sys.argv[1], 'x').close()
+key = libc.ftok(os.fsencode(sys.argv[1]), ord('Q'))
+segment = libc.shmget(key, 1, 0o3600)  # IPC_CREAT | IPC_EXCL | 0600
+assert segment >= 0
+assert libc.shmat(segment, None, 0) != ctypes.c_void_p(-1).value
+print('ready', flush=True)
+time.sleep(60)
+"#,
         ])
-        .stdout(Stdio::null())
+        .arg(directory.join(QT_MEMORY_KEY))
+        .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .kill_on_drop(true)
         .spawn()
         .unwrap();
-    let guardian = Guardian::start(&mut engine, Path::new(env!("CARGO_BIN_EXE_deskflow-ddc")))
-        .await
-        .unwrap();
+    use tokio::io::AsyncBufReadExt;
+    let mut output = tokio::io::BufReader::new(engine.stdout.take().unwrap()).lines();
+    assert_eq!(output.next_line().await.unwrap().as_deref(), Some("ready"));
+    let guardian = Guardian::start(
+        &mut engine,
+        Path::new(env!("CARGO_BIN_EXE_deskflow-ddc")),
+        directory,
+    )
+    .await
+    .unwrap();
     std::fs::write(
         file,
         format!("{} {}", engine.id().unwrap(), guardian.pid().unwrap()),
@@ -53,8 +79,9 @@ async fn guardian_owner_fixture() {
 }
 
 #[test]
-fn parent_death_reaps_only_its_guarded_engine_without_gui_or_accessibility() {
+fn parent_death_reaps_its_engine_and_releases_qt_ipc() {
     let directory = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
     let file = directory.path().join("owned-pids");
     let mut owner = std::process::Command::new(std::env::current_exe().unwrap())
         .args(["--exact", "guardian_owner_fixture", "--nocapture"])
@@ -85,6 +112,10 @@ fn parent_death_reaps_only_its_guarded_engine_without_gui_or_accessibility() {
         .spawn()
         .unwrap();
     assert!(alive(pids[0]) && alive(pids[1]));
+    let path = directory.path().join(QT_MEMORY_KEY);
+    let path = CString::new(path.as_os_str().as_bytes()).unwrap();
+    let key = unsafe { libc::ftok(path.as_ptr(), b'Q'.into()) };
+    assert!(unsafe { libc::shmget(key, 0, 0) } >= 0);
     owner.kill().unwrap();
     owner.wait().unwrap();
     let deadline = Instant::now() + Duration::from_secs(3);
@@ -99,6 +130,7 @@ fn parent_death_reaps_only_its_guarded_engine_without_gui_or_accessibility() {
     assert!(!engine_alive, "Engine survived abrupt owner death");
     assert!(!guard_alive, "Guardian did not exit after releasing engine");
     assert!(untouched, "Unrelated process was affected");
+    assert_eq!(unsafe { libc::shmget(key, 0, 0) }, -1, "Qt IPC leaked");
 }
 
 #[tokio::test]
@@ -109,7 +141,10 @@ async fn normal_cleanup_reaps_guard_and_rejects_a_reused_process_identity() {
         .spawn()
         .unwrap();
     let binary = Path::new(env!("CARGO_BIN_EXE_deskflow-ddc"));
-    let guardian = Guardian::start(&mut child, binary).await.unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let guardian = Guardian::start(&mut child, binary, directory.path())
+        .await
+        .unwrap();
     let pid = guardian.pid().unwrap();
     child.kill().await.unwrap();
     guardian.finish().await;
@@ -128,6 +163,7 @@ async fn normal_cleanup_reaps_guard_and_rejects_a_reused_process_identity() {
             "0",
             "0",
         ])
+        .arg(directory.path())
         .stdin(Stdio::null())
         .output()
         .await
