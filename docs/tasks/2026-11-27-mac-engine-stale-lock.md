@@ -22,16 +22,19 @@
 - 应用把本次启动的私有临时目录交给退出保护进程。引擎退出后，保护进程用 Qt 的键文件定位共享内存和信号量，并核对系统记录的 UID、引擎 PID 及共享内存附着数再回收。
 - 应用在保护进程启动失败或异常结束时，也会在确认引擎退出后尝试回收本次启动的资源。
 - 保留每次启动独立临时目录及现有引擎预检查。自动清理限定于本次启动，避免误清历史记录不足或其他程序使用的 IPC。
-- 在用户 Mac 上核对日志及内核记录后，为本次验证回收了 3 个旧版 Deskflow 已退出的引擎槽位。
+- 在用户 Mac 上核对日志及内核记录后，共回收 25 个已退出的旧版 Deskflow 引擎槽位，现场占用从 32 降到 7。
 
 ## 验证
 
 - 本机原生 IPC 单元测试已通过，验证错误 PID 和仍附着的共享内存会被保留，匹配的空闲段与信号量会被回收。
-- 正在运行 Rust 全量单元测试、桌面保护进程集成测试和 CI。
+- `cargo test --locked --manifest-path src-tauri/Cargo.toml --no-default-features --lib -- --test-threads=1`：203 项通过。选用串行验证，避免显示测试的并发计时干扰。
+- `cargo test --locked --manifest-path src-tauri/Cargo.toml --test engine_guard -- --test-threads=1`：3 项通过。强制结束父应用后，保护进程终止专属引擎并回收其共享内存，其他进程继续运行。
+- `pnpm build:web`、`pnpm test:native`：通过。
+- 实体双机测试待安装修复版后验证。
 
 ## PR 与状态
 
-待创建。
+[PR #7](https://github.com/Ian3302/deskflow-ddc/pull/7) 已创建，GitHub Actions 检查待完成。
 
 ## 遗留问题
 
