@@ -92,25 +92,12 @@ try {
     })
   } else {
     if (process.platform === 'win32') {
-      const script = join(staging, 'extract.ps1')
-      writeFileSync(
-        script,
-        'param([string]$Archive, [string]$Destination)\n$ErrorActionPreference="Stop"\nExpand-Archive -LiteralPath $Archive -DestinationPath $Destination\n',
-      )
-      execFileSync(
-        'powershell.exe',
-        [
-          '-NoProfile',
-          '-NonInteractive',
-          '-File',
-          script,
-          '-Archive',
-          archive,
-          '-Destination',
-          join(staging, 'content'),
-        ],
-        { stdio: 'inherit', windowsHide: true },
-      )
+      // Windows ships bsdtar. It can extract the verified portable ZIP
+      // without depending on PowerShell's archiving module and .NET overloads.
+      execFileSync('tar.exe', ['-xf', archive, '-C', join(staging, 'content')], {
+        stdio: 'inherit',
+        windowsHide: true,
+      })
     } else execFileSync('unzip', ['-q', archive, '-d', join(staging, 'content')])
     rmSync(target, { recursive: true, force: true })
     mkdirSync(target)

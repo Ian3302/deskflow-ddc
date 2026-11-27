@@ -24,12 +24,15 @@
 - 保留每次启动独立临时目录及现有引擎预检查。自动清理限定于本次启动，避免误清历史记录不足或其他程序使用的 IPC。
 - 在用户 Mac 上核对日志及内核记录后，共回收 25 个已退出的旧版 Deskflow 引擎槽位，现场占用从 32 降到 7。
 
+- Windows CI 在准备已校验的 Deskflow ZIP 时，PowerShell `Expand-Archive` 因 .NET 方法重载不匹配而失败。Windows 解压改用系统自带的 bsdtar (`tar.exe`)，保持原有哈希校验、临时目录及打包流程。
+
 ## 验证
 
 - 本机原生 IPC 单元测试已通过，验证错误 PID 和仍附着的共享内存会被保留，匹配的空闲段与信号量会被回收。
 - `cargo test --locked --manifest-path src-tauri/Cargo.toml --no-default-features --lib -- --test-threads=1`：203 项通过。选用串行验证，避免显示测试的并发计时干扰。
 - `cargo test --locked --manifest-path src-tauri/Cargo.toml --test engine_guard -- --test-threads=1`：3 项通过。强制结束父应用后，保护进程终止专属引擎并回收其共享内存，其他进程继续运行。
 - `pnpm build:web`、`pnpm test:native`：通过。
+- `pnpm test`：85 项通过。官方打包引擎解包、签名以及版本冒烟测试通过。macOS 应用打包、签名校验和压缩包完整性验证通过。
 - 实体双机测试待安装修复版后验证。
 
 ## PR 与状态
