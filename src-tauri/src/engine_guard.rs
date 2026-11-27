@@ -1,7 +1,14 @@
 //! A separate macOS process releases the owned engine if its app dies before
 //! async cleanup can run. It never scans or terminates another app's engine.
 use anyhow::{ensure, Context, Result};
-use std::{io::Read, path::Path, process::Stdio, time::Duration};
+use std::{
+    ffi::CString,
+    io::Read,
+    os::unix::{ffi::OsStrExt, fs::MetadataExt},
+    path::Path,
+    process::Stdio,
+    time::{Duration, Instant},
+};
 use tokio::{
     io::AsyncBufReadExt,
     process::{Child, ChildStdin, Command},
@@ -13,6 +20,7 @@ struct ProcessIdentity {
     uid: u32,
     seconds: u64,
     micros: u64,
+    zombie: bool,
 }
 fn identity(pid: u32) -> Result<ProcessIdentity> {
     ensure!(pid > 1 && pid <= i32::MAX as u32, "无效的引擎进程 ID");
@@ -33,6 +41,7 @@ fn identity(pid: u32) -> Result<ProcessIdentity> {
         uid: info.pbi_uid,
         seconds: info.pbi_start_tvsec,
         micros: info.pbi_start_tvusec,
+        zombie: info.pbi_status == libc::SZOMB,
     })
 }
 
@@ -41,6 +50,72 @@ fn owned_parents(owner: u32, guard_parent: u32, engine_parent: u32) -> bool {
     // to launchd first when the owner exits. UID and exact engine start time
     // are checked separately; never require matching parent snapshots.
     owner > 1 && [owner, 1].contains(&guard_parent) && [owner, 1].contains(&engine_parent)
+}
+
+// Qt's legacy System V keys for the bundled Deskflow 1.27 core. These files
+// are created inside the per-launch TMPDIR, so no system-wide scan is needed.
+const SHARED_MEMORY_FILE: &str =
+    "qipc_sharedmemory_deskflowcorefbfa2630dd772f55959dda40b83431af95318db4";
+const SEMAPHORE_FILE: &str = "qipc_systemsem_deskflowcorefbfa2630dd772f55959dda40b83431af95318db4";
+
+fn qt_key(directory: &Path, name: &str, uid: u32) -> Option<libc::key_t> {
+    let path = directory.join(name);
+    let metadata = path.symlink_metadata().ok()?;
+    if !metadata.is_file() || metadata.uid() != uid || metadata.nlink() != 1 {
+        return None;
+    }
+    let path = CString::new(path.as_os_str().as_bytes()).ok()?;
+    let key = unsafe { libc::ftok(path.as_ptr(), b'Q'.into()) };
+    (key > 0).then_some(key)
+}
+
+// Only call after the owned process has stopped. ftok keys can collide, so
+// kernel ownership, PID and attachment checks are required as well.
+pub(crate) fn cleanup_engine_ipc(directory: &Path, pid: u32) {
+    let uid = unsafe { libc::getuid() };
+    let Ok(metadata) = directory.symlink_metadata() else {
+        return;
+    };
+    if !metadata.is_dir() || metadata.uid() != uid || metadata.mode() & 0o777 != 0o700 {
+        return;
+    }
+    let pid = pid as libc::pid_t;
+    let shared_memory = qt_key(directory, SHARED_MEMORY_FILE, uid);
+    if let Some(key) = shared_memory {
+        reclaim_shared_memory(key, pid, uid);
+    }
+    let semaphore = qt_key(directory, SEMAPHORE_FILE, uid);
+    unsafe {
+        if let Some(key) = semaphore {
+            let id = libc::semget(key, 1, 0);
+            let mut info: libc::semid_ds = std::mem::zeroed();
+            if id >= 0
+                && libc::semctl(id, 0, libc::IPC_STAT, &mut info as *mut libc::semid_ds) == 0
+                && info.sem_perm.cuid == uid
+                && info.sem_perm.uid == uid
+                && info.sem_nsems == 1
+                && libc::semctl(id, 0, libc::GETPID) == pid
+            {
+                libc::semctl(id, 0, libc::IPC_RMID, 0);
+            }
+        }
+    }
+}
+
+fn reclaim_shared_memory(key: libc::key_t, pid: libc::pid_t, uid: u32) -> bool {
+    unsafe {
+        let id = libc::shmget(key, 0, 0);
+        let mut info: libc::shmid_ds = std::mem::zeroed();
+        id >= 0
+            && libc::shmctl(id, libc::IPC_STAT, &mut info) == 0
+            && info.shm_perm.cuid == uid
+            && info.shm_perm.uid == uid
+            && info.shm_cpid == pid
+            && info.shm_lpid == pid
+            && info.shm_segsz == 1
+            && info.shm_nattch == 0
+            && libc::shmctl(id, libc::IPC_RMID, std::ptr::null_mut()) == 0
+    }
 }
 
 pub struct Guardian {
@@ -55,7 +130,7 @@ impl Guardian {
         self.child.wait().await
     }
 
-    pub async fn start(engine: &mut Child, executable: &Path) -> Result<Self> {
+    pub async fn start(engine: &mut Child, executable: &Path, directory: &Path) -> Result<Self> {
         let pid = engine.id().context("引擎已结束")?;
         let fingerprint = identity(pid)?;
         ensure!(
@@ -70,6 +145,7 @@ impl Guardian {
                 &fingerprint.seconds.to_string(),
                 &fingerprint.micros.to_string(),
             ])
+            .arg(directory)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -115,7 +191,7 @@ pub fn run_if_requested() -> Option<i32> {
 }
 fn run(args: &[String]) -> Result<()> {
     use std::io::Write;
-    ensure!(args.len() == 6, "无效的退出保护参数");
+    ensure!(args.len() == 7, "无效的退出保护参数");
     let parent: u32 = args[2].parse()?;
     let pid: u32 = args[3].parse()?;
     let initial = identity(pid)?;
@@ -143,22 +219,79 @@ fn run(args: &[String]) -> Result<()> {
             Err(e) => return Err(e.into()),
         }
     }
-    if identity(pid).is_ok_and(|current| {
-        current.uid == initial.uid
-            && current.seconds == initial.seconds
-            && current.micros == initial.micros
-    }) {
+    let engine_alive = || {
+        identity(pid).is_ok_and(|current| {
+            current.uid == initial.uid
+                && current.seconds == initial.seconds
+                && current.micros == initial.micros
+                && !current.zombie
+        })
+    };
+    if engine_alive() {
         // PID reuse cannot target an unrelated process: match kernel start time.
         unsafe {
             libc::kill(pid as i32, libc::SIGKILL);
         }
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while engine_alive() {
+            ensure!(Instant::now() < deadline, "等待键鼠引擎退出超时");
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
+    cleanup_engine_ipc(Path::new(&args[6]), pid);
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reclaims_only_detached_qt_ipc_owned_by_the_engine() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let uid = unsafe { libc::getuid() };
+        let pid = std::process::id();
+        for name in [SHARED_MEMORY_FILE, SEMAPHORE_FILE] {
+            std::fs::File::create(path.join(name)).unwrap();
+        }
+        unsafe {
+            let key = qt_key(path, SHARED_MEMORY_FILE, uid).unwrap();
+            let shm = libc::shmget(key, 1, libc::IPC_CREAT | libc::IPC_EXCL | 0o600);
+            assert!(shm >= 0, "{}", std::io::Error::last_os_error());
+            let sem_key = qt_key(path, SEMAPHORE_FILE, uid).unwrap();
+            let sem = libc::semget(sem_key, 1, libc::IPC_CREAT | libc::IPC_EXCL | 0o600);
+            assert!(sem >= 0, "{}", std::io::Error::last_os_error());
+            let attached = libc::shmat(shm, std::ptr::null(), 0);
+            assert_ne!(attached as isize, -1);
+            assert_eq!(libc::semctl(sem, 0, libc::SETVAL, 1), 0);
+            let mut op: libc::sembuf = std::mem::zeroed();
+            op.sem_op = -1;
+            assert_eq!(libc::semop(sem, &mut op, 1), 0);
+
+            // A wrong creator must leave both resources alone.
+            cleanup_engine_ipc(path, pid + 1);
+            assert_eq!(libc::shmget(key, 0, 0), shm);
+            assert_eq!(libc::semget(sem_key, 1, 0), sem);
+            // A matching creator is insufficient while memory is attached.
+            assert!(!reclaim_shared_memory(key, pid as libc::pid_t, uid));
+            assert_eq!(libc::shmdt(attached), 0);
+
+            cleanup_engine_ipc(path, pid);
+            let remaining_shm = libc::shmget(key, 0, 0);
+            let remaining_sem = libc::semget(sem_key, 1, 0);
+            if remaining_shm >= 0 {
+                libc::shmctl(shm, libc::IPC_RMID, std::ptr::null_mut());
+            }
+            if remaining_sem >= 0 {
+                libc::semctl(sem, 0, libc::IPC_RMID, 0);
+            }
+            assert_eq!(remaining_shm, -1);
+            assert_eq!(remaining_sem, -1);
+        }
+    }
 
     #[test]
     fn accepts_both_orders_of_owner_death_during_parent_snapshots() {
