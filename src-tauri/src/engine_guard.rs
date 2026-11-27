@@ -80,9 +80,13 @@ pub(crate) fn cleanup_engine_ipc(directory: &Path, pid: u32) {
         return;
     }
     let pid = pid as libc::pid_t;
-    let shared_memory = qt_key(directory, SHARED_MEMORY_FILE, uid);
-    if let Some(key) = shared_memory {
-        reclaim_shared_memory(key, pid, uid);
+    if let Some(key) = qt_key(directory, SHARED_MEMORY_FILE, uid) {
+        // Darwin can expose a zombie before exit has detached its System V
+        // mappings. Give kernel teardown time to finish before giving up.
+        let deadline = Instant::now() + Duration::from_millis(500);
+        while !cleanup_shared_memory(key, pid, uid) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
     let semaphore = qt_key(directory, SEMAPHORE_FILE, uid);
     unsafe {
@@ -102,19 +106,27 @@ pub(crate) fn cleanup_engine_ipc(directory: &Path, pid: u32) {
     }
 }
 
-fn reclaim_shared_memory(key: libc::key_t, pid: libc::pid_t, uid: u32) -> bool {
+// Return false only when our own segment is still attached and cleanup
+// should be retried. Ownership is checked again on each attempt.
+fn cleanup_shared_memory(key: libc::key_t, pid: libc::pid_t, uid: u32) -> bool {
     unsafe {
         let id = libc::shmget(key, 0, 0);
         let mut info: libc::shmid_ds = std::mem::zeroed();
-        id >= 0
-            && libc::shmctl(id, libc::IPC_STAT, &mut info) == 0
-            && info.shm_perm.cuid == uid
-            && info.shm_perm.uid == uid
-            && info.shm_cpid == pid
-            && info.shm_lpid == pid
-            && info.shm_segsz == 1
-            && info.shm_nattch == 0
-            && libc::shmctl(id, libc::IPC_RMID, std::ptr::null_mut()) == 0
+        if id < 0
+            || libc::shmctl(id, libc::IPC_STAT, &mut info) != 0
+            || info.shm_perm.cuid != uid
+            || info.shm_perm.uid != uid
+            || info.shm_cpid != pid
+            || info.shm_lpid != pid
+            || info.shm_segsz != 1
+        {
+            return true;
+        }
+        if info.shm_nattch != 0 {
+            return false;
+        }
+        libc::shmctl(id, libc::IPC_RMID, std::ptr::null_mut());
+        true
     }
 }
 
@@ -276,10 +288,16 @@ mod tests {
             assert_eq!(libc::shmget(key, 0, 0), shm);
             assert_eq!(libc::semget(sem_key, 1, 0), sem);
             // A matching creator is insufficient while memory is attached.
-            assert!(!reclaim_shared_memory(key, pid as libc::pid_t, uid));
-            assert_eq!(libc::shmdt(attached), 0);
-
-            cleanup_engine_ipc(path, pid);
+            assert!(!cleanup_shared_memory(key, pid as libc::pid_t, uid));
+            std::thread::scope(|scope| {
+                let attached_address = attached as usize;
+                let detach = scope.spawn(move || {
+                    std::thread::sleep(Duration::from_millis(30));
+                    assert_eq!(libc::shmdt(attached_address as *const libc::c_void), 0);
+                });
+                cleanup_engine_ipc(path, pid);
+                detach.join().unwrap();
+            });
             let remaining_shm = libc::shmget(key, 0, 0);
             let remaining_sem = libc::semget(sem_key, 1, 0);
             if remaining_shm >= 0 {
